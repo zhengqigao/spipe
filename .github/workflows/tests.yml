@@ -29,16 +29,8 @@ jobs:
           python -m pip install -e .
 
       - name: Acceptance suite
-        # tb05 compares against HSPICE and Xyce, which need commercial licences
-        # and are not available on a hosted runner. Everything else runs here.
+        # run_all.py skips tb05 automatically when neither Xyce nor HSPICE is on
+        # PATH, which is the case on a hosted runner. Everything else runs.
         env:
           MPLBACKEND: Agg
-        run: |
-          fail=0
-          for t in test/tb/tb*.py; do
-            case "$t" in *tb05_*) echo "SKIP $t (needs HSPICE/Xyce)"; continue;; esac
-            echo "::group::$t"
-            python "$t" || fail=1
-            echo "::endgroup::"
-          done
-          exit $fail
+        run: python test/run_all.py

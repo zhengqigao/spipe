@@ -4,7 +4,8 @@ Every number here is measured by the suite in `test/`, which checks against **cl
 physics** wherever possible rather than against another simulator. Run it yourself:
 
 ```bash
-for t in test/tb/tb*.py; do python "$t"; done
+python test/run_all.py          # single PASS/FAIL verdict
+python test/run_all.py --quick  # ~20 s, 203 checks
 ```
 
 ## Summary: 306 checks, 10 benches
