@@ -1,0 +1,62 @@
+* -------------------------------------------------------------------------------------------
+* Level-1 (Shichman-Hodges) MOSFET models for the derived SPIPE example circuits.
+*
+* Why these exist
+* ---------------
+* The sky130 DAC decks under test2/dac_model use the foundry BSIM4 models (level=54).  BSIM4 is
+* a ~500 parameter compact model with a hand-written C implementation; it is not something a
+* small native circuit engine can host, so every circuit in test2/ is locked to a licensed
+* commercial simulator.  These models are the opposite trade: level=1 is eight parameters and
+* three equations (cut-off / triode / saturation with channel-length modulation and the body
+* effect), which every SPICE-family engine implements, SPIPE's native back end included.
+*
+* They are NOT sky130.  They are a generic 0.5 um-class 3.3 V CMOS set whose *terminal
+* behaviour* -- threshold, transconductance parameter, switch on-resistance, overlap
+* capacitance -- is in the right region for the circuits built on them, and the DAC built with
+* them is then calibrated against the measured sky130 reference (swing, LSB, settling).
+*
+* Parameter provenance
+* --------------------
+*   VTO     0.50 / -0.55 V   threshold, a normal 3.3 V I/O-class device
+*   KP      120u / 40u A/V2  = mu * Cox; the 3:1 n:p ratio is the usual mobility ratio
+*   GAMMA   0.40 / 0.45      body effect, sqrt(2 q eps Na)/Cox for ~1e17 cm-3 doping
+*   PHI     0.70 V           2 phi_F at that doping
+*   LAMBDA  0.05 / 0.08 1/V  channel-length modulation at L = 0.5 um
+*   TOX     14 nm            consistent with KP above at mu_n = 500 cm2/Vs
+*   CGSO/CGDO 2e-10 F/m      gate-source/drain overlap, ~0.5 * TOX-equivalent of a 50 nm overlap
+*   CJ/CJSW/MJ/PB            abrupt-ish junction, only used when AD/AS/PD/PS are given
+* -------------------------------------------------------------------------------------------
+
+.model nmos1 nmos
++ level  = 1
++ vto    = 0.50
++ kp     = 120u
++ gamma  = 0.40
++ phi    = 0.70
++ lambda = 0.05
++ tox    = 14n
++ cgso   = 2e-10
++ cgdo   = 2e-10
++ cgbo   = 1e-10
++ cj     = 1e-4
++ cjsw   = 2e-10
++ mj     = 0.5
++ pb     = 0.80
++ is     = 1e-15
+
+.model pmos1 pmos
++ level  = 1
++ vto    = -0.55
++ kp     = 40u
++ gamma  = 0.45
++ phi    = 0.70
++ lambda = 0.08
++ tox    = 14n
++ cgso   = 2e-10
++ cgdo   = 2e-10
++ cgbo   = 1e-10
++ cj     = 1e-4
++ cjsw   = 2e-10
++ mj     = 0.5
++ pb     = 0.80
++ is     = 1e-15

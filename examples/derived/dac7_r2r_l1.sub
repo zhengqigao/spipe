@@ -1,0 +1,128 @@
+* -------------------------------------------------------------------------------------------
+* s7bit_DAC_l1 -- N1.  A 7-bit voltage-mode R-2R DAC built from Level-1 CMOS switches.
+*
+* Same eleven pins, in the same order, as test2/dac_model/8bit_DAC/7bit_DAC.sub:
+*
+*     .subckt s7bit_DAC  vrefh vrefl d0 d1 d2 d3 d4 d5 d6 vdd vout
+*
+* so it drops straight into the netlists that use the sky130 part.
+*
+* Topology
+* --------
+* The sky130 original is a *recursive interpolating* converter: a 7-bit DAC is two 6-bit DACs
+* whose outputs are selected by a transmission gate, all the way down to a four-resistor string.
+* That structure works, but the two halves load each other through a node that nothing drives,
+* which is where its 2.5 LSB of INL and its non-monotonicity come from.
+*
+* This is a plain R-2R ladder instead:
+*
+*     vrefl --2R-- a0 --R-- a1 --R-- ... --R-- a6 --> vout
+*                   |        |                 |
+*                  2R       2R                2R
+*                   |        |                 |
+*                  t0       t1                t6        (each t_k switched to vrefh or vrefl)
+*
+* Every branch node sees the same 2R looking each way, so the ladder halves the contribution of
+* each bit exactly and
+*
+*     vout = vrefl + (vrefh - vrefl) * code / 128,     code = sum_k d_k 2^k,
+*
+* i.e. full scale is 127/128 of the reference -- 3.2742 V from a 3.3 V reference, and an LSB of
+* 3.3/128 = 25.781 mV.  Those are the two numbers the sky130 reference measures (3.2742 V and
+* 25.781 mV): the R-2R ladder reproduces them by construction rather than by calibration,
+* because they are properties of the *reference and the bit count*, not of the topology.
+*
+* Output resistance and settling
+* ------------------------------
+* The Thevenin resistance seen at a6 is exactly R (= rlad), independently of the code -- one of
+* the reasons to prefer R-2R.  ``cload`` is the routing/pad capacitance at the output and is
+* what sets the settling time: the sky130 part settles to 1% in 2.73 ns, and ``cload`` is
+* calibrated (by n1_dac.py) so that this one does too.
+*
+* Parameters
+* ----------
+*   rlad    ladder resistance R [Ohm]; the legs are 2*rlad
+*   cload   output capacitance [F]
+* -------------------------------------------------------------------------------------------
+
+.subckt s7bit_DAC_l1 vrefh vrefl d0 d1 d2 d3 d4 d5 d6 vdd vout rlad=2k cload=0.2742538p
+
+* Bit switches: t_k = vrefh when d_k is high, vrefl when it is low.
+xsw0 d0 vdd vrefh vrefl t0 switch_l1
+xsw1 d1 vdd vrefh vrefl t1 switch_l1
+xsw2 d2 vdd vrefh vrefl t2 switch_l1
+xsw3 d3 vdd vrefh vrefl t3 switch_l1
+xsw4 d4 vdd vrefh vrefl t4 switch_l1
+xsw5 d5 vdd vrefh vrefl t5 switch_l1
+xsw6 d6 vdd vrefh vrefl t6 switch_l1
+
+* The 2R legs.
+rleg0 t0 a0 'rlad*2'
+rleg1 t1 a1 'rlad*2'
+rleg2 t2 a2 'rlad*2'
+rleg3 t3 a3 'rlad*2'
+rleg4 t4 a4 'rlad*2'
+rleg5 t5 a5 'rlad*2'
+rleg6 t6 a6 'rlad*2'
+
+* The ladder termination (the 2R that makes a0 see 2R both ways) and the R rungs.
+rterm a0 vrefl 'rlad*2'
+rlad0 a0 a1 'rlad'
+rlad1 a1 a2 'rlad'
+rlad2 a2 a3 'rlad'
+rlad3 a3 a4 'rlad'
+rlad4 a4 a5 'rlad'
+rlad5 a5 a6 'rlad'
+
+* Output node and its load capacitance.
+rout a6 vout 1
+cout vout 0 'cload'
+
+.ends s7bit_DAC_l1
+
+* -------------------------------------------------------------------------------------------
+* s8bit_DAC_l1 -- the same ladder with one more bit.
+*
+* The sky130 part builds its 8-bit converter as two 7-bit converters plus a selecting switch,
+* with the two halves sharing a node that nothing drives.  An R-2R ladder does not need that
+* trick: an extra rung is an extra bit, the Thevenin resistance is still R, and the converter
+* stays monotonic.  Full scale is vrefh * 255/256 and the LSB is vrefh/256 = 12.891 mV at
+* vrefh = 3.3 V, i.e. exactly half the 7-bit LSB, as it should be.
+*
+* Pin order matches the 7-bit part with d7 appended before vdd, so it is the natural
+* replacement for the `x*_1 / x*_2 / x*_3` triple the sky130 netlists use.
+* -------------------------------------------------------------------------------------------
+
+.subckt s8bit_DAC_l1 vrefh vrefl d0 d1 d2 d3 d4 d5 d6 d7 vdd vout rlad=2k cload=0.2742538p
+
+xsw0 d0 vdd vrefh vrefl t0 switch_l1
+xsw1 d1 vdd vrefh vrefl t1 switch_l1
+xsw2 d2 vdd vrefh vrefl t2 switch_l1
+xsw3 d3 vdd vrefh vrefl t3 switch_l1
+xsw4 d4 vdd vrefh vrefl t4 switch_l1
+xsw5 d5 vdd vrefh vrefl t5 switch_l1
+xsw6 d6 vdd vrefh vrefl t6 switch_l1
+xsw7 d7 vdd vrefh vrefl t7 switch_l1
+
+rleg0 t0 a0 'rlad*2'
+rleg1 t1 a1 'rlad*2'
+rleg2 t2 a2 'rlad*2'
+rleg3 t3 a3 'rlad*2'
+rleg4 t4 a4 'rlad*2'
+rleg5 t5 a5 'rlad*2'
+rleg6 t6 a6 'rlad*2'
+rleg7 t7 a7 'rlad*2'
+
+rterm a0 vrefl 'rlad*2'
+rlad0 a0 a1 'rlad'
+rlad1 a1 a2 'rlad'
+rlad2 a2 a3 'rlad'
+rlad3 a3 a4 'rlad'
+rlad4 a4 a5 'rlad'
+rlad5 a5 a6 'rlad'
+rlad6 a6 a7 'rlad'
+
+rout a7 vout 1
+cout vout 0 'cload'
+
+.ends s8bit_DAC_l1

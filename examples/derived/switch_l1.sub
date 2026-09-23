@@ -1,0 +1,31 @@
+* -------------------------------------------------------------------------------------------
+* switch_l1 -- Level-1 replacement for the sky130 `switch` subcircuit.
+*
+* Same five pins, in the same order, as test2/dac_model/8bit_DAC/switch.sub:
+*
+*     .subckt switch  /digital_input /vdd /vin_1 /vin_2 /vout
+*
+* so it is a drop-in: vin_1 is connected to vout when digital_input is high, vin_2 when it is
+* low.  The sky130 original builds that from two chained inverters plus two CMOS transmission
+* gates; this does the same with level=1 devices, sized so that the on-resistance of a gate is
+* ~40 Ohm, i.e. small compared with the 2 kOhm ladder resistance of the DAC it feeds.  Both
+* polarities of the gate are present (NMOS and PMOS in parallel), which is what keeps the
+* on-resistance roughly flat across the whole 0 .. vdd input range -- a single NMOS pass
+* transistor would lose the top threshold and put a large code-dependent error into the DAC.
+* -------------------------------------------------------------------------------------------
+
+.subckt switch_l1 dig vdd vin1 vin2 vout
+
+* Inverter: dignot = NOT dig.
+mpinv dignot dig vdd vdd pmos1 w=6u l=0.5u
+mninv dignot dig 0   0   nmos1 w=2u l=0.5u
+
+* Transmission gate A: vin1 -- vout, conducting when dig is high.
+mpa vout dignot vin1 vdd pmos1 w=60u l=0.5u
+mna vout dig    vin1 0   nmos1 w=20u l=0.5u
+
+* Transmission gate B: vin2 -- vout, conducting when dig is low.
+mpb vout dig    vin2 vdd pmos1 w=60u l=0.5u
+mnb vout dignot vin2 0   nmos1 w=20u l=0.5u
+
+.ends switch_l1

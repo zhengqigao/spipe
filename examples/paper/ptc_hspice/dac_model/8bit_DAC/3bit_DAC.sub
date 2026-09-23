@@ -1,0 +1,11 @@
+* Subcircuit 3bit_DAC
+.subckt s3bit_DAC vrefh vrefl d0 d1 d2 vdd vout
+
+.include 2bit_DAC.sub
+.include switch.sub
+x1 vrefh net-_x1-pad2_ d0 d1 vdd net-_x1-pad6_ s2bit_DAC
+x2 net-_x1-pad2_ vrefl d0 d1 vdd net-_x2-pad6_ s2bit_DAC
+x3 d2 vdd net-_x1-pad6_ net-_x2-pad6_ vout switch
+* Control Statements
+
+.ends s3bit_DAC

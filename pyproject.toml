@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spipe"
+version = "2.0.0"
+description = "Differentiable SPICE-level co-simulation for integrated photonics and electronics"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Zhengqi Gao" }]
+keywords = ["photonics", "electronics", "co-simulation", "SPICE", "scattering-matrix", "differentiable"]
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+dependencies = [
+    "torch>=1.13",
+    "numpy>=1.21",
+    "scipy>=1.6",
+]
+
+[project.optional-dependencies]
+examples = ["matplotlib>=3.4", "h5py>=3.0"]
+
+[project.urls]
+Homepage = "https://github.com/zhengqigao/spipe"
+Paper = "https://doi.org/10.1109/TCAD.2025.3597958"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+spipe = ["photonic/model/*.json"]

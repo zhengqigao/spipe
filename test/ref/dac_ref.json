@@ -1,0 +1,16 @@
+{
+  "source": "HSPICE X-2025.06 on sky130_fd_pr BSIM4 (level=54), 7-bit DAC subckt",
+  "nbits": 7,
+  "vdd": 3.3,
+  "vhi": 1.8,
+  "vout_min": 1.89792e-05,
+  "vout_max": 3.2742,
+  "swing": 3.2741810208,
+  "lsb": 0.02578095291968504,
+  "inl_max_lsb": 2.516993597252719,
+  "dnl_max_lsb": 2.5166235368338583,
+  "monotonic": false,
+  "settle_1pct_s": 2.730000000000012e-09,
+  "step_v0": 1.89792e-05,
+  "step_vfinal": 3.2742
+}

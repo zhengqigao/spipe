@@ -1,0 +1,133 @@
+
+clear; switchtodesign; deleteall;
+# Written next to this script. Override by editing this line, or point the
+# Python driver at another directory with $SPIPE_INTERCONNECT_DIR.
+file_prefix = '';
+
+N = 18;
+M = 18;
+
+total = (N+1)*M+N*(M+1);
+
+delta_x = 300;
+delta_y = 300;
+
+bias_x = -150;
+bias_y = 150;
+
+ng = 2.35;
+neff=2.35;
+wg_l = 2.500000e-04;
+loss = 1782.11; # corresponds to alpha=0.95 in our code
+
+ps_init = [0.5*pi, 0.0*pi];
+
+bottom_cp_list = {'C_1', 'C_2'};
+bottom_ps_list = {'PHS_1', 'PHS_2'};
+bottom_wg_list = {'WGD_1', 'WGD_2'};
+
+
+param = readdata(file_prefix + 'param.txt');
+given_size = size(param);
+
+if ((given_size(1) != total) | (given_size(2) != length(bottom_cp_list))){
+    print("error parameter shape");
+    param = zeros(total, length(bottom_cp_list));    
+}
+
+
+count = 1;
+
+for (i=1:N){
+    for (j=1:M+1){
+        addelement("TBU");
+        device_name = "compound_hori_" + num2str(i) + "_" + num2str(j);
+        set("name", device_name);         
+        set("x position", i*delta_x);
+        set("y position", j*delta_y);
+        
+        for (m=1:length(bottom_wg_list)){
+             wrk_name = device_name + "::" + bottom_wg_list{m};
+             select(wrk_name);
+             set("length", wg_l);
+             set("effective index 1", neff);
+             set("group index 1", ng);
+             # set("loss 1", loss);
+            }
+         for (m=1:length(bottom_ps_list)){
+             wrk_name = device_name + "::" + bottom_ps_list{m};
+             select(wrk_name);
+             set("phase shift", ps_init(m));
+            }
+          
+          for (m=1:length(bottom_cp_list)){
+             wrk_name = device_name + "::" + bottom_cp_list{m};
+             select(wrk_name);
+             set("coupling coefficient 1", param(count,m));
+            }
+            count = count + 1;
+        }    
+    }
+    
+ for (i=1:N+1){
+    for (j=1:M){
+        addelement("TBU");
+        device_name = "compound_verti_" + num2str(i) + "_" + num2str(j);
+        set("name", device_name);         
+        set("x position", bias_x + i*delta_x);
+        set("y position", bias_y + j*delta_y);
+        set("rotated", 1); # some magical number to put it in vertical
+        
+        for (m=1:length(bottom_wg_list)){
+             wrk_name = device_name + "::" + bottom_wg_list{m};
+             select(wrk_name);
+             set("length", wg_l);
+             set("effective index 1", neff);
+             set("group index 1", ng);
+             # set("loss 1", loss);
+            }
+         for (m=1:length(bottom_ps_list)){
+             wrk_name = device_name + "::" + bottom_ps_list{m};
+             select(wrk_name);
+             set("phase shift", ps_init(m));
+            } 
+         
+         for (m=1:length(bottom_cp_list)){
+             wrk_name = device_name + "::" + bottom_cp_list{m};
+             select(wrk_name);
+             set("coupling coefficient 1", param(count,m));
+            }
+            count = count + 1;   
+        }    
+    }
+    
+ 
+ # connect TBUs.
+ 
+ for (i=1:N){
+    for (j=1:M){
+        connect("compound_verti_" + num2str(i) + "_" + num2str(j), "port 1", "compound_hori_" + num2str(i) + "_" + num2str(j), "port 2");
+        connect("compound_hori_" + num2str(i) + "_" + num2str(j), "port 4", "compound_verti_" + num2str(i+1) + "_" + num2str(j), "port 2");        
+        connect("compound_verti_" + num2str(i+1) + "_" + num2str(j), "port 4", "compound_hori_" + num2str(i) + "_" + num2str(j+1), "port 3");        
+        connect("compound_hori_" + num2str(i) + "_" + num2str(j+1), "port 1", "compound_verti_" + num2str(i) + "_" + num2str(j), "port 3");        
+        }          
+     }
+
+addelement("Optical Network Analyzer");
+connect("ONA_1", "input 1", "compound_hori_1_1", "port 3");
+connect("ONA_1", "output", "compound_hori_1_1", "port 1");
+set("input parameter", "start and stop");
+set("start frequency", 1.928000e+14);
+set("stop frequency", 1.934000e+14);
+set("number of points", 100);
+
+run;
+
+wrk=getresult("ONA_1","input 1/mode 1/transmission");
+t=getattribute(wrk,"TE transmission");
+real_t = real(t);
+image_t = imag(t);
+write("out_real.txt", num2str(real_t), "overwrite");
+write("out_imag.txt", num2str(image_t), "overwrite");
+# matlabsave(file_prefix + 'out.mat', t);
+    
