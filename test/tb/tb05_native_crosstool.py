@@ -13,9 +13,11 @@ import torch
 torch.set_default_dtype(torch.float64)
 
 WRK = tempfile.mkdtemp(prefix='tb05_')
-# Site-specific setup for the licensed simulators. Set SPIPE_CAD_SETUP to any
-# shell snippet that puts `hspice` and `Xyce` on PATH (e.g. an environment-modules
-# `module load`). If unset, both are assumed to be on PATH already.
+# Locating the external simulators. `which Xyce` / `which hspice` is the portable
+# way to check whether they are already on PATH -- if both print a path, nothing
+# else is needed here. How you get them onto PATH differs from site to site, so
+# nothing is assumed: set SPIPE_CAD_SETUP to any shell snippet that does it and
+# it is prepended to each invocation.
 _CAD_SETUP = os.environ.get('SPIPE_CAD_SETUP', '')
 MODLOAD = (_CAD_SETUP + '; ') if _CAD_SETUP else ''
 

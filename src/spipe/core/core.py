@@ -660,8 +660,29 @@ class Circuit(object):
         if self.time is not None and len(self.time) > 1:
             self.p_circuit.check_quasistatic(float(self.time[1] - self.time[0]))
 
-    def simulate(self, seed: Optional[int] = None, x0: Optional[torch.Tensor] = None):
+    def simulate(self,
+                 seed: Optional[int] = None,
+                 x0: Optional[torch.Tensor] = None,
+                 mode: str = 'quasistatic',
+                 differentiable: Optional[bool] = None):
         """Run the coupled electronic/photonic fixed-point simulation.
+
+        **This is the only simulation entry point you need.**  It follows the usual PyTorch
+        convention: gradients cost nothing unless you ask for them.  If some ``.sensparam``
+        device parameter has ``requires_grad=True``, the returned tensors carry a usable
+        autograd graph all the way back to it; otherwise the cheaper gradient-free path runs
+        and the result is identical.
+
+        ::
+
+            ckt = Circuit('link.sp', spice_exe='native')
+
+            _, _, photocurrent, drive, _ = ckt.simulate()      # plain run, no graph
+
+            w = ckt.param('mn1', 'W')                          # requires_grad already True
+            _, _, photocurrent, drive, _ = ckt.simulate()      # now differentiable
+            (photocurrent[:, 0] ** 2).sum().backward()
+            w.grad                                             # d(optical) / dW
 
         :param seed: overrides ``config['seed']`` for this run.  The seed is applied to a private
             ``torch.Generator``, so the caller's global RNG state is left untouched, and the same
@@ -672,7 +693,22 @@ class Circuit(object):
             with *multiple* stable fixed points -- an optical latch, say -- has genuinely more
             than one answer, and which one the solver reaches is a property of the initial
             guess, not of the circuit; this is how you choose.
+        :param mode: photonic solver mode, ``'quasistatic'`` (default) or ``'envelope'``.
+            Only consulted on the differentiable path; ``'envelope'`` does not carry gradients.
+        :param differentiable: force the choice instead of detecting it.  ``True`` always
+            builds the graph (and warns if nothing can receive a gradient), ``False`` never
+            does.  ``None``, the default, decides from whether any declared parameter
+            requires grad and whether grad is enabled at all.
         """
+        if differentiable is None:
+            differentiable = (
+                torch.is_grad_enabled()
+                and bool(self.e_circuit.sens_declared)
+                and any(self.e_circuit.sens_values[(d.lower(), n)].requires_grad
+                        for d, n in self.e_circuit.sens_declared)
+            )
+        if differentiable:
+            return self.differentiable_simulate(self.time, seed=seed, x0=x0, mode=mode)
         return self.gradient_free_simulate(self.time, seed=seed, x0=x0)
 
     def param(self, device: str, name: str) -> torch.Tensor:

@@ -10,10 +10,17 @@ trusting it. Exit status is 0 only if every check in every bench passed.
 
 Most benches need nothing but PyTorch. `tb05_native_crosstool` compares the
 built-in engine against Xyce (free, open source) and HSPICE; it is skipped
-automatically when neither is on PATH. Point $SPIPE_CAD_SETUP at a shell
-snippet that puts them there if you want it to run:
+automatically when neither is on PATH.
 
-    export SPIPE_CAD_SETUP='module load xyce hspice'
+To see whether you have them, use `which` -- note the capital X on Xyce:
+
+    which Xyce
+    which hspice
+
+If those print a path, this script finds them with no further setup. If not,
+put them on PATH however your environment does it (that differs from site to
+site, so nothing is assumed here), or set $SPIPE_CAD_SETUP to a shell snippet
+that does it and the suite will run that first.
 """
 import argparse
 import os
@@ -78,7 +85,9 @@ def main():
         if args.quick and slow:
             print(f"  {name:<26} skipped (--quick)"); continue
         if name == 'tb05_native_crosstool' and not have_cad:
-            print(f"  {name:<26} skipped (no Xyce or HSPICE on PATH)"); continue
+            print(f"  {name:<26} skipped  -- needs Xyce or HSPICE; neither is on PATH")
+            print(f"  {'':<26}            check with:  which Xyce   /   which hspice")
+            continue
 
         r = subprocess.run([sys.executable, path], capture_output=True, text=True, env=env)
         m = None

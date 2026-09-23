@@ -32,8 +32,17 @@ runs every photonic circuit and every electronic–photonic co-simulation.
 
 The `examples/paper/` scripts additionally reproduce the paper against external tools —
 **Xyce** (free, open source) or **HSPICE** (commercial) for the electronics, and
-**Lumerical INTERCONNECT** for the photonic cross-check. Put them on `PATH`, or point
-`$SPIPE_XYCE` / `$SPIPE_HSPICE` at them.
+**Lumerical INTERCONNECT** for the photonic cross-check. Check whether you already have
+them with `which`:
+
+```bash
+which Xyce            # capital X
+which hspice
+which interconnect    # Lumerical INTERCONNECT, lowercase
+```
+
+Anything that prints a path is ready to use. For anything that does not, either put it on
+`PATH` or point `$SPIPE_XYCE` / `$SPIPE_HSPICE` at the executable directly.
 
 ## Quick start
 
@@ -208,7 +217,6 @@ Note the coupling is implicit: node `vdrv` is written by the electronic deck and
 SPIPE cuts the circuit at exactly those nodes.
 
 ```python
-import torch
 from spipe import Circuit
 
 ckt = Circuit("examples/link_driver_mzm.sp", spice_exe="native")
@@ -216,7 +224,7 @@ ckt = Circuit("examples/link_driver_mzm.sp", spice_exe="native")
 w = ckt.param("mn1", "W")        # a float64 leaf tensor, requires_grad already True
                                  # because MN1:W was named on the .sensparam line
 
-_, _, photocurrent, drive, _ = ckt.differentiable_simulate()
+_, _, photocurrent, drive, _ = ckt.simulate()
 
 loss = (photocurrent[:, 0] ** 2).sum()   # any optical figure of merit
 loss.backward()
@@ -226,6 +234,20 @@ w.grad        # d(loss)/dW = 29.19573838   -- exact, through the whole chain
 
 That is the entire program. `spice_exe=` selects the backend: `"native"` (built in),
 `"xyce"` or `"hspice"`.
+
+**There is only one simulation call.** `simulate()` follows the usual PyTorch convention —
+gradients cost nothing unless you ask for them:
+
+| situation | what `simulate()` does |
+|---|---|
+| no `.sensparam` in the netlist | plain run, no graph |
+| `.sensparam` declared but `requires_grad=False` | plain run, no graph |
+| called inside `torch.no_grad()` | plain run, no graph |
+| a declared parameter requires grad | **builds the graph**, 1.65× the plain runtime |
+
+The returned *values* are the same either way (verified identical); only the graph is added.
+`differentiable_simulate()` still exists if you want to force the issue, but you should not
+normally need it.
 
 Measured against central finite differences over the **whole** chain:
 
@@ -327,10 +349,22 @@ hook. This is the regression gate to run before trusting any change to the solve
 
 Most benches need nothing but PyTorch. `tb05_native_crosstool` compares the built-in engine
 against **Xyce** (free, open source) and HSPICE, and is skipped automatically when neither
-is on `PATH`. To include it:
+is on `PATH`.
+
+Check whether they are, with `which` — note the capital `X`:
 
 ```bash
-export SPIPE_CAD_SETUP='module load xyce hspice'   # whatever puts them on PATH
+which Xyce      # /usr/local/bin/Xyce        (nothing printed => not on PATH)
+which hspice    # /opt/synopsys/.../hspice
+```
+
+If both print a path, `python test/run_all.py` picks them up with no further setup. If not,
+put them on `PATH` however your environment does it — every site differs, so SPIPE does not
+assume one. If you would rather not change `PATH`, set `$SPIPE_CAD_SETUP` to any shell
+snippet that does it for you, and the suite will run that first:
+
+```bash
+export SPIPE_CAD_SETUP='. /opt/xyce/setup.sh'    # or `module load ...`, or anything else
 python test/run_all.py
 ```
 
