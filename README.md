@@ -51,11 +51,18 @@ netlist = [l + "\n" for l in [
     "pd2 b2 vo2 level1 r0=1.0",           # detector 2
     ".prob b1",                           # also report the field at node b1
 ]]
+# simulate() always returns the same three things:
+#
+#   photocurrent  what the detectors measure   (n_time, n_detectors)
+#   probes        the optical field at the nodes named on `.prob` lines
+#   power         the laser power budget, in watts
+#
 photocurrent, probes, power = Photonic(netlist).simulate()
 
-photocurrent.shape        # (1, 2)     -> (n_time, n_detectors)
-photocurrent              # tensor([[0.5, 0.5]])   half the light to each port
-probes["b1"].shape        # (1, 1, 2)  -> (n_time, n_freq, 2)
+photocurrent.shape        # (1, 2)  -> one time point, two `pd` lines
+photocurrent              # tensor([[0.5, 0.5]])  half the light to each port
+probes["b1"].shape        # (1, 1, 2)  -> (n_time, n_freq, [inward, outward])
+power                     # {"photonic": None}  -- see below: needs power=/eff=
 ```
 
 An **active** device (`mzm`, `modm`, `modp`) is driven by an electrical signal, so it needs
@@ -100,6 +107,12 @@ netlist = [l + "\n" for l in [
 t     = torch.linspace(0, 1e-8, 5)                 # (n_time,)            seconds
 drive = torch.linspace(0, 2.0, 5).reshape(-1, 1)   # (n_time, n_mod)      volts, 0 -> V_pi
 
+# Same three returns as before, now with a real time axis:
+#
+#   photocurrent  (n_time, n_detectors)  -- here (5, 2), one row per time point
+#   probes        {} -- empty, because this netlist has no `.prob` line
+#   power         {"photonic": None} -- the laser was not characterised
+#
 photocurrent, probes, power = Photonic(netlist).simulate(t, drive)
 
 photocurrent[:, 0]   # detector 1, one value per time point:
@@ -114,7 +127,9 @@ photocurrent[:, 0]   # detector 1, one value per time point:
 > or HSPICE), feeds the modulator voltages into the photonic solve, feeds the photocurrents
 > back, and iterates to a self-consistent solution. See `examples/`.
 
-### What comes back
+### What comes back, in detail
+
+Those three returns, precisely:
 
 | returned | type / shape | meaning |
 |---|---|---|
@@ -158,35 +173,71 @@ gradient chain breaks:
    └──────────────────────  d|E_out|² / dW  ◄───────────────────────────┘
 ```
 
-Nothing special is required: SPIPE's built-in engine is written in PyTorch, so a device
-parameter is a leaf tensor and `.backward()` simply works.
+You describe **both domains in one netlist** and call **one** function. SPIPE runs the
+electronics, feeds the modulator voltages into the photonic solve, feeds the photocurrents
+back, iterates to a self-consistent solution, and keeps the autograd graph across all of it.
+
+`examples/link_driver_mzm.sp` — a CMOS inverter driving a Mach-Zehnder modulator:
+
+```
+* One file, both domains.
+
+.electronic
+.model nch NMOS (LEVEL=1 VTO=0.7  KP=120u LAMBDA=0.02)
+.model pch PMOS (LEVEL=1 VTO=-0.7 KP=40u  LAMBDA=0.02)
+Vdd vdd 0 3.0
+Vin g   0 PULSE(0 3 1n 0.2n 0.2n 10n 20n)
+MN1 vdrv g 0   0   nch W=8u  L=0.5u      * <- the width we differentiate w.r.t.
+MP1 vdrv g vdd vdd pch W=16u L=0.5u
+Rload1 vo1 0 1k                          * photodetector outputs need a DC path
+Rload2 vo2 0 1k
+.sensparam MN1:W MN1:L                   * declare the differentiable parameters
+.tran 0 4e-8 40                          * start, stop, number of time points
+
+.photonic
+.mode neff=2.35 ng=4.0 wl=1550e-9
+.freq 193.1e12 193.1e12 1
+.source 1.0@a1 0.0@a2
+mzm0 a1 a2 b1 b2 vdrv level3 vpi=2.0 vbias=0.0 il=0.0
+pd1 b1 vo1 level1 r0=1.0                 * `vdrv` and `vo1/vo2` are the two
+pd2 b2 vo2 level1 r0=1.0                 *   electronic-photonic interfaces
+```
+
+Note the coupling is implicit: node `vdrv` is written by the electronic deck and read by
+`mzm0`; nodes `vo1`/`vo2` are written by the photodetectors and read by the electronics.
+SPIPE cuts the circuit at exactly those nodes.
 
 ```python
 import torch
-from spipe.electronic.native import Netlist
-from spipe.photonic.photonic import Photonic
+from spipe import Circuit
 
-ckt = Netlist.from_string(driver_netlist)     # a CMOS driver into the modulator load
-w   = ckt.param("MN1", "W")                   # the pull-down width: a float64 leaf tensor
-w.requires_grad_(True)
+ckt = Circuit("examples/link_driver_mzm.sp", spice_exe="native")
 
-res   = ckt.tran(2e-11, 3e-8)                 # electrical transient
-optic = Photonic(photonic_netlist, need_grads=True)
-out, _, _ = optic.simulate(res.t, res.v("mod").reshape(-1, 1))
+w = ckt.param("mn1", "W")        # a float64 leaf tensor, requires_grad already True
+                                 # because MN1:W was named on the .sensparam line
 
-(out[:, 0] ** 2).sum().backward()
-w.grad        # d|E_out|² / dW  -- exact, one backward pass
+_, _, photocurrent, drive, _ = ckt.differentiable_simulate()
+
+loss = (photocurrent[:, 0] ** 2).sum()   # any optical figure of merit
+loss.backward()
+
+w.grad        # d(loss)/dW = 29.19573838   -- exact, through the whole chain
 ```
+
+That is the entire program. `spice_exe=` selects the backend: `"native"` (built in),
+`"xyce"` or `"hspice"`.
 
 Measured against central finite differences over the **whole** chain:
 
-| | |
-|---|---|
-| analytic | `-115016.7648` |
-| finite difference | `-115016.7645` |
-| **relative error** | **`1.9e-09`** |
+| | through `Circuit.differentiable_simulate()` | composing the two solvers by hand |
+|---|---|---|
+| analytic | `29.19573838` | `-115016.7648` |
+| finite difference | `29.19573860` | `-115016.7645` |
+| **relative error** | **`7.6e-09`** | **`1.9e-09`** |
 
-Verified on two independent circuits (`test/tb/tb12_end_to_end_grad.py`).
+Both routes are checked in `test/tb/tb12_end_to_end_grad.py`. The unified call is what you
+want in practice; composing `Netlist` and `Photonic` yourself is only useful when you need
+to insert something between the two domains.
 
 **How it works, and why it is cheap.** Three pieces compose:
 
