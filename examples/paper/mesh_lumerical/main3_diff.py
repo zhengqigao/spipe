@@ -104,10 +104,10 @@ def run_spipe(num_row, num_col, source_in, prob_node):
     beta = 2 * pi * (freq_start + freq_end) / 2 * THZ * neff / FreeLightSpeed
     bound = 2 * pi / (beta * coeff * act_l)
 
-    circuit = Photonic(final.split('\n'), need_grads=True)
-    v = (bound * torch.rand(len(t), len(circuit.mod_element.keys()))).to(config['device']).requires_grad_(True)
+    photonic = Photonic(final.split('\n'), need_grads=True)
+    v = (bound * torch.rand(len(t), len(photonic.mod_element.keys()))).to(config['device']).requires_grad_(True)
     v = v.requires_grad_(True)
-    vout, middle, _ = circuit.simulate(t, v)
+    vout, middle, _ = photonic.simulate(t, v)
 
 
     loss = (vout ** 2).sum()
@@ -124,16 +124,16 @@ def run_spipe(num_row, num_col, source_in, prob_node):
 
             # Calculate the perturbations
             v_perturb[i, j] = (1 + 2 * epsilon) * tmp
-            vout_perturb2h_plus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturb2h_plus, _, _ = photonic.simulate(t, v_perturb)
 
             v_perturb[i, j] = (1 + epsilon) * tmp
-            vout_perturbh_plus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturbh_plus, _, _ = photonic.simulate(t, v_perturb)
 
             v_perturb[i, j] = (1 - epsilon) * tmp
-            vout_perturbh_minus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturbh_minus, _, _ = photonic.simulate(t, v_perturb)
 
             v_perturb[i, j] = (1 - 2 * epsilon) * tmp
-            vout_perturb2h_minus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturb2h_minus, _, _ = photonic.simulate(t, v_perturb)
 
             # Calculate the loss perturbations using the five-point stencil method
             loss_perturb = (

@@ -24,7 +24,7 @@ import torch
 from spipe.photonic import FreeLightSpeed
 from spipe import config
 
-# verify the calculation of gradients for a more general/complex active photonic circuit 2-by-2 mesh shown in
+# verify the calculation of gradients for a more general/complex active photonic photonic 2-by-2 mesh shown in
 # https://github.com/zhengqigao/spode/blob/main/tutorials/lesson2_verify_2by2_mesh/main.ipynb
 # Cautiously optimisitic: seems to work. The incremental gradient sometimes might be far from golden...
 # I manually derived an anlytical solution in a special case (all modms in cross state) to compare it with the incremental.
@@ -77,7 +77,7 @@ modm10 n18 n17 n24 n23 m12 level1 wgu_l={wg_u} wgl_l={wg_l} coeff1=1.0 act_l=10e
 
 epsilon = 1e-5
 start_time = time.time()
-circuit = Photonic(p_content.split('\n'), need_grads=True)
+photonic = Photonic(p_content.split('\n'), need_grads=True)
 end_time1 = time.time()
 
 
@@ -87,14 +87,14 @@ bound = 2 * pi / (beta * coeff * act_l)
 torch.manual_seed(0)
 for i in range(num_exp):
     t = torch.linspace(0,1,1).to(config['device'])
-    v = (bound * torch.rand(len(t), len(circuit.mod_element.keys()))).to(config['device']).requires_grad_(True)
+    v = (bound * torch.rand(len(t), len(photonic.mod_element.keys()))).to(config['device']).requires_grad_(True)
 
-    # v = 3 / 80.0 * torch.ones(len(t), len(circuit.mod_element.keys()))
+    # v = 3 / 80.0 * torch.ones(len(t), len(photonic.mod_element.keys()))
     # v[:,-1] = 1.0
 
     v = v.requires_grad_(True)
 
-    vout, middle , _ = circuit.simulate(t, v)
+    vout, middle , _ = photonic.simulate(t, v)
 
     loss = (vout ** 2).sum()
 
@@ -108,16 +108,16 @@ for i in range(num_exp):
 
             # Calculate the perturbations
             v_perturb[i, j] = (1 + 2 * epsilon) * tmp
-            vout_perturb2h_plus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturb2h_plus, _, _ = photonic.simulate(t, v_perturb)
 
             v_perturb[i, j] = (1 + epsilon) * tmp
-            vout_perturbh_plus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturbh_plus, _, _ = photonic.simulate(t, v_perturb)
 
             v_perturb[i, j] = (1 - epsilon) * tmp
-            vout_perturbh_minus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturbh_minus, _, _ = photonic.simulate(t, v_perturb)
 
             v_perturb[i, j] = (1 - 2 * epsilon) * tmp
-            vout_perturb2h_minus, _, _ = circuit.simulate(t, v_perturb)
+            vout_perturb2h_minus, _, _ = photonic.simulate(t, v_perturb)
 
             # Calculate the loss perturbations using the five-point stencil method
             loss_perturb = (
@@ -140,7 +140,7 @@ for i in range(num_exp):
 
 end_time2 = time.time()
 outward_ind = 1
-print(f"spipe build circuit: {end_time1 - start_time:.3f} seconds")
+print(f"spipe build photonic: {end_time1 - start_time:.3f} seconds")
 print(f"spipe run time: {(end_time2 - end_time1)/num_exp:.3f} seconds")
 
 plt.figure()

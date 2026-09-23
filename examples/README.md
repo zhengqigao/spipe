@@ -61,7 +61,8 @@ produced a number is always on disk next to it. Set `MPLBACKEND=Agg` when runnin
 `spipe.core.core.solve_fixed_point(step, x0, config, max_iter=None) -> (x_star, info)` is the
 electronic/photonic coupling, written without any reference to SPICE, so that its convergence
 behaviour is testable with a three-line pure-Python `step`.
-`Circuit.gradient_free_simulate` is a thin wrapper over it.
+`Circuit.simulate()` reaches it through `gradient_free_simulate`, so the two cannot
+drift apart.
 
 * **Anderson acceleration** (`config['anderson_depth']`, default 5) is the workhorse. It costs
   no extra evaluations of `step` and converges on contraction factors at and above one, which

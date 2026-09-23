@@ -171,6 +171,20 @@ depend on how you normalise the source amplitudes.
 For a full electronic–photonic co-simulation, write one text file with a `.electronic`
 and a `.photonic` section and hand it to `spipe.Circuit`; see `examples/`.
 
+### Two objects, both with `simulate()`
+
+There are exactly two things you can simulate, and the one you pick decides what comes back:
+
+| you have | object | call | returns |
+|---|---|---|---|
+| a photonic netlist only | `Photonic(netlist)` | `.simulate()` or `.simulate(t, drive)` | **3** — `photocurrent, probes, power` |
+| one netlist with `.electronic` **and** `.photonic` | `Circuit(path, spice_exe=...)` | `.simulate()` | **5** — `probes_e, probes_p, photocurrent, drive, power` |
+
+`Photonic` solves the optical network alone; you supply the modulator drive yourself, as in
+the examples above. `Circuit` additionally runs the electronics and iterates the two domains
+to a self-consistent solution, so it returns the electrical probes and the converged drive
+as well. Both are called `simulate()` and neither needs a variant for gradients.
+
 ## End-to-end differentiability
 
 This is what SPIPE is for. You can differentiate an **optical** quantity with respect to an
@@ -251,7 +265,7 @@ normally need it.
 
 Measured against central finite differences over the **whole** chain:
 
-| | through `Circuit.differentiable_simulate()` | composing the two solvers by hand |
+| | through `Circuit.simulate()` | composing the two solvers by hand |
 |---|---|---|
 | analytic | `29.19573838` | `-115016.7648` |
 | finite difference | `29.19573860` | `-115016.7645` |
@@ -273,8 +287,8 @@ to insert something between the two domains.
    One small linear solve, independent of how many iterations ran, and it reports if the
    coupling Jacobian is ill-conditioned rather than returning a silent wrong number.
 
-`Circuit.differentiable_simulate()` wires all three together for a co-simulation; declare
-which electronic parameters are differentiable with `.sensparam` in the netlist:
+`Circuit.simulate()` wires all three together for a co-simulation; declare which
+electronic parameters are differentiable with `.sensparam` in the netlist:
 
 ```
 .sensparam MN1:W MN1:L RL:R

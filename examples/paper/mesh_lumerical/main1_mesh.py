@@ -98,9 +98,9 @@ def run_spipe(num_row, num_col, param, source_in, prob_node):
     final += f".prob {prob_node}\n"
 
     start_time = time.time()
-    circuit = Photonic(final.split('\n'))
+    photonic = Photonic(final.split('\n'))
 
-    res, middle_res, power_dict = circuit.simulate()
+    res, middle_res, power_dict = photonic.simulate()
     run_time = time.time() - start_time
 
     return run_time, middle_res
@@ -250,11 +250,11 @@ write("out_imag.txt", num2str(image_t), "overwrite");
         for i in range(param.shape[0]):
             f.write(f"{param[i, 0]} {param[i, 1]}\n")
 
-    with open(os.path.join(file_path, 'circuit.lsf'), 'w') as f:
+    with open(os.path.join(file_path, 'photonic.lsf'), 'w') as f:
         f.write(text_lsf)
 
     start = time.time()
-    cmd = f"interconnect {os.path.join(file_path, 'circuit.lsf')} -run -exit" # -hide
+    cmd = f"interconnect {os.path.join(file_path, 'photonic.lsf')} -run -exit" # -hide
     os.system(cmd)
     run_time = time.time() - start
 
