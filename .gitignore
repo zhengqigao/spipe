@@ -8,6 +8,15 @@ build/
 dist/
 .eggs/
 
+# Lumerical INTERCONNECT run artifacts. These are regenerated on every run and embed
+# the absolute path of whoever ran them, so they must never be committed.
+examples/paper/mesh_lumerical/interconnect/photonic.lsf
+examples/paper/mesh_lumerical/interconnect/photonic.xml
+examples/paper/mesh_lumerical/interconnect/param.txt
+examples/paper/mesh_lumerical/interconnect/out_real.txt
+examples/paper/mesh_lumerical/interconnect/out_imag.txt
+examples/paper/mesh_lumerical/interconnect/compare.png
+
 # SPICE / simulator run artifacts
 *.lis
 *.st0

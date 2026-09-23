@@ -4,7 +4,7 @@ These must hold after EVERY phase of the campaign -- they are the properties tha
 the solver physically meaningful at all. Ground truth is physics and closed-form algebra,
 never another simulator.
 
-Also exercises the REAL netlists shipped in test2/*.sp (photonic sections only, so no
+Also exercises the REAL netlists shipped in examples/paper/ptc_hspice/*.sp (photonic sections only, so no
 HSPICE needed), which is the cheapest broad regression available.
 """
 import sys, os, math, re, glob
@@ -162,7 +162,7 @@ def build():
     # ---------- 5. the REAL shipped netlists still solve -------------------
     # the shipped paper netlists live under examples/ in the released layout
     _pats = [os.path.join(REPO, 'examples', 'paper', 'ptc_hspice', 'test1*.sp'),
-             os.path.join(REPO, 'test2', 'test1*.sp')]
+             os.path.join(REPO, 'test2', 'test1*.sp')]      # pre-release layout, kept as a fallback
     _files = sorted({f for _p in _pats for f in glob.glob(_p)})
     if not _files:
         tb.ok('REG.netlists_found', False, f'no shipped netlists matched {_pats}')

@@ -162,12 +162,18 @@ def _is_detector(p_line: str) -> bool:
 
 
 def _process_spice_wrk_dir(spice_wrk_dir: str) -> None:
-    if not os.path.isdir(spice_wrk_dir):
-        try:
-            os.makedirs(spice_wrk_dir)
-        except:
-            raise RuntimeError(f'Making directory {spice_wrk_dir} for Spice run-time fails.')
-    return
+    """Make the SPICE scratch directory, keeping the reason it could not be made.
+
+    ``exist_ok`` closes the check-then-create race (two SPIPE runs sharing a work
+    directory), and chaining preserves the OSError -- "Permission denied" and "No space
+    left on device" need different fixes, and the old bare ``except:`` discarded both.
+    """
+    try:
+        os.makedirs(spice_wrk_dir, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(
+            f'Could not create the SPICE working directory {spice_wrk_dir!r}: {error}'
+        ) from error
 
 
 _model_dict = {'mod': [ModModel(), -2], 'pd': [PdModel(), -2]}

@@ -10,12 +10,16 @@ trusting it. Exit status is 0 only if every check in every bench passed.
 
 Most benches need nothing but PyTorch. `tb05_native_crosstool` compares the
 built-in engine against Xyce (free, open source) and HSPICE; it is skipped
-automatically when neither is on PATH.
+automatically when neither is on PATH. `tb08_lumerical_mesh` compares the
+photonic solver against a *stored* Lumerical INTERCONNECT result, so it runs
+with no licence; with INTERCONNECT on PATH it also re-checks that the stored
+reference still matches a live run.
 
 To see whether you have them, use `which` -- note the capital X on Xyce:
 
     which Xyce
     which hspice
+    which interconnect     # Lumerical INTERCONNECT, lower case -- optional
 
 If those print a path, this script finds them with no further setup. If not,
 put them on PATH however your environment does it (that differs from site to
@@ -42,6 +46,7 @@ BENCHES = {
     'tb05_native_crosstool':  ('built-in engine vs Xyce and HSPICE (needs one of them)', True),
     'tb06_native_gradients':  ('autograd vs adjoint vs finite difference', True),
     'tb07_fixedpoint':        ('fixed point: convergence, divergence, bistability', False),
+    'tb08_lumerical_mesh':    ('photonic mesh vs Lumerical INTERCONNECT (stored reference)', False),
     'tb10_bugfix_X':          ('regression guards on previously fixed defects', False),
     'tb11_envelope_P3':       ('optical memory / envelope propagation', False),
     'tb12_end_to_end_grad':   ('d|E|^2/dW through the whole chain', True),

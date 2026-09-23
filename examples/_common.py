@@ -29,7 +29,7 @@ import torch  # noqa: E402  (after the sys.path fix-up on purpose)
 from spipe import config  # noqa: E402
 from spipe.core.core import FixedPointError  # noqa: E402
 
-#: The SPICE executables the shipped examples in ``test1/`` and ``test2/`` use.  Override with
+#: The SPICE executables the paper decks in ``examples/paper/`` use.  Override with
 #: ``--spice-exe`` (or the ``SPIPE_SPICE_EXE`` environment variable) on any machine where they
 #: live somewhere else.
 DEFAULT_SPICE_EXE = {

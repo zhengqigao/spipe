@@ -181,7 +181,8 @@ def main() -> int:
     # here: HSPICE chooses its own internal time steps, so feeding it a *different* photocurrent
     # PWL gives back a slightly different interpolated waveform even where the circuit is
     # linear.  That reproducibility floor is ~1e-3 V rms on this record (it is ~3e-4 V on the
-    # feedback-free examples in test2/), and asking the iteration to go below it only buys a
+    # feedback-free paper decks in examples/paper/), and asking the iteration to go below it
+    # only buys a
     # residual that will not fall.
     set_config(args, max_iter=200, anderson_depth=args.anderson_depth)
 

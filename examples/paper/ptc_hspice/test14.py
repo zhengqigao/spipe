@@ -95,10 +95,6 @@ def gen_exp(num_expect, t_interval, t_transit, vcontrol, vmax, bit):
     v1, v1_value = helper(d_input1, vcontrol, vmax, bit, sorted=True)
     print(v1, v1_value)
 
-    ## TODO: remove it
-    # v1 = torch.zeros_like(v1)
-    # v1_value = torch.zeros_like(v1_value)
-
     return t, v1, v1_value
 
 

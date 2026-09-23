@@ -765,8 +765,22 @@ class Circuit(object):
                 {**power_e, 'photonic': power_p['photonic']})
 
 
-    def get_power(self):
-        pass
+    def get_power(self) -> Dict:
+        """The power report from the most recent :meth:`simulate` call.
+
+        Same dict :meth:`simulate` returns as its fifth element -- the electronic power
+        nodes plus ``'photonic'``, the laser wall-plug power. Kept as a method because it
+        is convenient after a call whose return value you did not keep.
+
+        :raises RuntimeError: no simulation has run yet, so there is nothing to report.
+            (This used to be a stub that returned ``None`` unconditionally, which looked
+            like "this circuit draws no power".)
+        """
+        if getattr(self, 'power_report', None) is None:
+            raise RuntimeError(
+                "Circuit.get_power() has nothing to report: call Circuit.simulate() first. "
+                "The power report is built during the simulation, not from the netlist.")
+        return self.power_report
 
     # ----------------------------------------------------------------- differentiable path
     def differentiable_simulate(self,

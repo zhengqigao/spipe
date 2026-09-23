@@ -63,6 +63,14 @@ except ImportError:
             break
         _here = _os.path.dirname(_here)
 
+# `_common` lives in examples/, one directory up from this one, and is NOT a package.
+# Without this the script only imports when the current directory happens to be
+# examples/ -- so `python examples/derived/n1_dac.py` from the repo root, which is what
+# examples/README.md tells you to run, died on ModuleNotFoundError.
+_examples_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _examples_dir not in _sys.path:
+    _sys.path.insert(0, _examples_dir)
+
 import torch
 
 from _common import (add_common_arguments, banner, report_convergence, resolve_spice_exe,

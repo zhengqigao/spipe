@@ -2,7 +2,7 @@
 
 Why
 ---
-Every DAC in ``test2/`` instantiates the sky130 foundry models, which are BSIM4 (``level=54``).
+Every DAC in ``examples/paper/ptc_hspice/`` instantiates the sky130 foundry models, which are BSIM4 (``level=54``).
 That is a compact model with several hundred parameters and a hand-written implementation; it
 is not something a small native circuit engine can host, so those circuits only run on a
 licensed commercial simulator.  This is the same *function* -- an 8-bit-class voltage DAC
@@ -12,7 +12,7 @@ engine, including a native one, can evaluate.
 What is measured, and against what
 ----------------------------------
 The reference was captured from HSPICE on the real sky130 PDK, on the 7-bit subcircuit
-(``test2/dac_model/8bit_DAC/7bit_DAC.sub``), and is quoted in :data:`SKY130`:
+(``examples/paper/ptc_hspice/dac_model/8bit_DAC/7bit_DAC.sub``), and is quoted in :data:`SKY130`:
 
     output swing   3.27418 V
     LSB            25.781 mV
@@ -58,6 +58,14 @@ except ImportError:
             _sys.path.insert(0, _cand)
             break
         _here = _os.path.dirname(_here)
+
+# `_common` lives in examples/, one directory up from this one, and is NOT a package.
+# Without this the script only imports when the current directory happens to be
+# examples/ -- so `python examples/derived/n1_dac.py` from the repo root, which is what
+# examples/README.md tells you to run, died on ModuleNotFoundError.
+_examples_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _examples_dir not in _sys.path:
+    _sys.path.insert(0, _examples_dir)
 
 from _common import (add_common_arguments, banner, resolve_spice_exe, run_spice, settling_time,
                      work_dir)

@@ -1,17 +1,24 @@
 # SPIPE examples
 
-Circuits that exercise parts of SPIPE the shipped `test1/` and `test2/` decks do not reach.
+Runnable documentation. Every script here is commented and prints a report explaining what
+it demonstrates; unlike `test/`, none of them assert — they show you numbers and leave the
+judgement to you. Start here to learn how to drive SPIPE.
 
-Everything in `test1/` and `test2/` is **feedback free** in the sense of Definition 1 of the
-paper: no photocurrent affects any modulator drive. That is why the electronic/photonic fixed
-point in those examples converges in exactly two evaluations — the round-trip map is a constant,
-so one evaluation produces the answer and the second confirms it. It is also why the iteration
-had never been stressed.
+If a netlist directive or device name is unfamiliar, [docs/netlist.md](../docs/netlist.md)
+defines all of them.
 
-The circuits here have real feedback, and one of them deliberately has no answer at all.
+## What each one is for
+
+Most of these circuits have **feedback**: the photocurrent a detector produces affects the
+voltage driving a modulator, so the two domains have to be solved together until they
+agree. The paper's own decks in `examples/paper/` are all feedback-free, which is why their
+fixed point converges in exactly two evaluations — the round-trip map is a constant, so one
+evaluation produces the answer and the second confirms it. The circuits below stress the
+iteration properly, and one of them deliberately has no answer at all.
 
 | example | what it is | what it shows |
 |---|---|---|
+| `mesh_vs_lumerical.py` | a programmable mesh checked against Lumerical INTERCONNECT | loops solved exactly; agreement to the limit of INTERCONNECT's output precision |
 | `oeo_electronic.py` | optoelectronic oscillator, frequency set by an electronic band-pass | loop gain > 1; the solver has to converge on a limit cycle |
 | `bistable_latch.py` | electro-optic latch with positive feedback | **two** stable fixed points; the answer depends on the initial guess |
 | `bias_control.py` | integrating bias-control loop | negative feedback; setpoint checkable in closed form |
@@ -19,7 +26,7 @@ The circuits here have real feedback, and one of them deliberately has no answer
 | `derived/n1_dac.py` | Level-1 R-2R DAC | calibrated against the measured sky130 reference |
 | `derived/n2_mzm_driver.py` | CMOS driver into the realistic `level3` RC modulator load | where `d(optical)/dW` lives |
 | `derived/n3_tia.py` | real common-source TIA | replaces the ideal 70 dB block of `pd_level2` |
-| `derived/n4_ptc_dotproduct.py` | the 2x2 photonic tensor core of `test2/test12.py` | same photonic netlist, Level-1 electronics |
+| `derived/n4_ptc_dotproduct.py` | the 2x2 photonic tensor core of `paper/ptc_hspice/test12.py` | same photonic netlist, Level-1 electronics |
 
 ## What they measured when they were written
 
@@ -27,6 +34,7 @@ HSPICE V-2023.12-SP2, `spipe.config` defaults unless the example says otherwise.
 
 | example | result |
 |---|---|
+| `mesh_vs_lumerical.py` | 2x2 and 3x3 meshes vs INTERCONNECT v242: max field difference **6.8e-07** and **6.6e-07** over 100 frequency points, against a 1e-06 floor set by INTERCONNECT's 7-digit text output; SPIPE 0.03-0.10 s vs INTERCONNECT 6-8 s |
 | `oeo_electronic.py` | oscillates at **2.0006 GHz** (FFT) / 1.9913 GHz (upward zero crossings) against an analytic closed-loop pole at 1.99609 GHz; limit-cycle drive amplitude 1.313 V against 1.410 V from the describing function; **45 fixed-point iterations**, residual 6.41e-2 -> 1.32e-3 |
 | `bistable_latch.py` | two stable states, **0.119232 V** and **2.229391 V**, against closed-form roots 0.119238 V and 2.229372 V; basin boundary at the unstable root 0.698867 V, straddled by the `x0 = 0.65` / `0.75` runs; 9-25 Picard iterations each |
 | `bias_control.py` | settles at vbias + 1.000 V for vbias = 0, +0.3, -0.4 V, within **2.2e-5 V** of the closed form in every case; 27-31 iterations |
@@ -35,11 +43,15 @@ HSPICE V-2023.12-SP2, `spipe.config` defaults unless the example says otherwise.
 | `derived/n1_dac.py --native` | the same 128-code transfer solved by `spipe.electronic.native`: **max &#124;native - HSPICE&#124; = 17 uV = 0.0007 LSB** |
 | `derived/n2_mzm_driver.py` | eye 2.3 -> 385 uA as W goes 4 -> 64 um; **d(eye)/dW = 9.34 uA/um** at W = 16 um |
 | `derived/n3_tia.py` | real TIA 7.99 kOhm and 480 ps against the ideal block's 9.99 kOhm and 60 ps |
-| `derived/n4_ptc_dotproduct.py` | photonic section byte-identical to `test2/test12.sp`; 2 fixed-point iterations; DAC error 1.44 LSB worst case; dot products within 0.25-0.89 V of closed form on a +-20 V scale |
+| `derived/n4_ptc_dotproduct.py` | photonic section byte-identical to `paper/ptc_hspice/test12.sp`; 2 fixed-point iterations; DAC error 1.44 LSB worst case; dot products within 0.25-0.89 V of closed form on a +-20 V scale |
 
 ## Running them
 
+Run them from the repository root:
+
 ```
+python examples/mesh_vs_lumerical.py            # no licence needed
+python examples/mesh_vs_lumerical.py --live     # also re-run INTERCONNECT
 python examples/oeo_electronic.py --plot
 python examples/bistable_latch.py
 python examples/bias_control.py
@@ -50,9 +62,35 @@ python examples/derived/n1_dac.py --native      # same transfer on spipe.electro
 python examples/derived/n4_ptc_dotproduct.py --tia   # also swap in N3's real front end
 ```
 
+`mesh_vs_lumerical.py` needs nothing but SPIPE. The `derived/` and loop examples need an
+external SPICE — check with `which hspice` or `which Xyce`.
+
+## The SKY130 models, for `paper/ptc_hspice/` only
+
+Those four decks instantiate the SkyWater SKY130 foundry transistors. The models are
+third-party (Apache-2.0, © The SkyWater PDK Authors) and are not shipped here:
+
+```bash
+./scripts/fetch_sky130.sh                    # report what is in place
+./scripts/fetch_sky130.sh $PDK_ROOT/sky130A  # install from an open_pdks build
+```
+
+**They must be in HSPICE syntax.** Cloning
+[google/skywater-pdk-libs-sky130_fd_pr](https://github.com/google/skywater-pdk-libs-sky130_fd_pr)
+does not work: it publishes ngspice syntax (`l = {l}` rather than `l = 'l'`) at every tag
+from v0.10.0 to main, and HSPICE stops with `syntax error at or before {l}`. The
+HSPICE-syntax library is what [open_pdks](https://github.com/RTimothyEdwards/open_pdks)
+generates. `fetch_sky130.sh` checks the syntax and confirms that every `.include` the model
+library names actually resolves, rather than leaving a tree that installs cleanly and fails
+inside the simulator.
+
+**Nothing else needs them.** `derived/` rebuilds the same circuits on Level-1 devices with
+no foundry models at all, and agrees with the SKY130 originals closely — 17 µV across the
+whole 128-code DAC transfer.
+
 Common options: `--sim {hspice,xyce}`, `--spice-exe '<command line>'` (or the
 `SPIPE_SPICE_EXE` environment variable), `--work-dir`, `--max-iter`, `--plot`. The default
-executables are the ones `test1/` and `test2/` use. Each example writes the netlist it
+executables are the ones `examples/paper/` uses. Each example writes the netlist it
 simulated, the SPICE scratch files and any plots into `examples/_run/<name>/`, so the deck that
 produced a number is always on disk next to it. Set `MPLBACKEND=Agg` when running headless.
 
@@ -61,8 +99,7 @@ produced a number is always on disk next to it. Set `MPLBACKEND=Agg` when runnin
 `spipe.core.core.solve_fixed_point(step, x0, config, max_iter=None) -> (x_star, info)` is the
 electronic/photonic coupling, written without any reference to SPICE, so that its convergence
 behaviour is testable with a three-line pure-Python `step`.
-`Circuit.simulate()` reaches it through `gradient_free_simulate`, so the two cannot
-drift apart.
+`Circuit.simulate()` reaches it through the same function, so the two cannot drift apart.
 
 * **Anderson acceleration** (`config['anderson_depth']`, default 5) is the workhorse. It costs
   no extra evaluations of `step` and converges on contraction factors at and above one, which

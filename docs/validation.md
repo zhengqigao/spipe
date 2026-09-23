@@ -5,23 +5,29 @@ physics** wherever possible rather than against another simulator. Run it yourse
 
 ```bash
 python test/run_all.py          # single PASS/FAIL verdict
-python test/run_all.py --quick  # ~20 s, 203 checks
+python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 306 checks, 10 benches
+## Summary: 345 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
 | `tb01_photonic_algebra` | unitarity, reciprocity, energy, passivity, resonance | 42 |
 | `tb02_eo_interface` | the `mzm` modulator against textbook MZM physics | 29 |
-| `tb03_oe_interface` | photodetector noise, bandwidth, dark current | 14 |
+| `tb03_oe_interface` | photodetector noise, bandwidth, and the detector options through `Photonic` | 19 |
 | `tb04_native_analytic` | built-in engine vs closed-form solutions | 35 |
 | `tb05_native_crosstool` | built-in engine vs HSPICE and Xyce | 33 |
 | `tb06_native_gradients` | autograd vs adjoint vs finite difference | 59 |
 | `tb07_fixedpoint` | convergence, divergence, bistability | 29 |
-| `tb10_bugfix_X` | regression guards on fixed defects | 45 |
+| `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
+| `tb10_bugfix_X` | regression guards on fixed defects | 49 |
 | `tb11_envelope_P3` | optical memory / envelope propagation | 9 |
-| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 11 |
+| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 20 |
+
+`tb05` needs Xyce or HSPICE and is skipped without them; every other bench runs on PyTorch
+alone. `tb08` compares against a *stored* INTERCONNECT result, so it needs no Lumerical
+licence — with INTERCONNECT on PATH it also re-checks that the stored reference still
+matches a live run (measured drift: exactly 0).
 
 ## Photonic core
 
@@ -31,6 +37,24 @@ python test/run_all.py --quick  # ~20 s, 203 checks
 | Lorentz reciprocity across an asymmetric lossy network | relative error **0.0** |
 | device S-matrices, unitarity `‖SᴴS − I‖` | ≤ 1.8e-16 |
 | adjoint `dx/dθ` vs central finite difference | **2.0e-10** |
+
+## Against an independent simulator
+
+A programmable mesh of 2×2 couplers is the sharpest test of the claim that loops are
+handled exactly: light recirculates indefinitely, and SPIPE sums the whole series in one
+factorisation. Lumerical INTERCONNECT solves the same network by a different route.
+
+| mesh | couplers | max \|E_SPIPE − E_INTERCONNECT\| | max difference in \|E\|² |
+|---|---|---|---|
+| 2×2 | 12 | **6.8e-07** | 1.2e-06 |
+| 3×3 | 24 | **6.6e-07** | 9.4e-07 |
+
+Both over 100 frequency points spanning 192.8–193.4 THz. That ~5e-7 is not a physics
+disagreement: INTERCONNECT writes its results through `num2str()`, which is 7 significant
+digits, so 1e-6 is the floor of any comparison made through that file. The two solvers
+agree as closely as the comparison can resolve.
+
+Runtime on the same problem: SPIPE 0.03 s, INTERCONNECT 8.1 s.
 
 ## Electro-optic interface
 

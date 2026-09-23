@@ -102,18 +102,45 @@ def build():
     tb.ok('X2.no_precedence_bug',
           'param_p-new_param_p/param_p' not in _flat,
           'the buggy expression must be gone from CODE (comments describing it are fine)')
-    # behavioural: a converged pair must satisfy the criterion; a diverged pair must not
-    try:
-        from spipe.core.core import _converged            # expected helper
-        a = torch.tensor([1.0, 2.0, 3.0]); b = a * (1 + 1e-9)
-        tb.ok('X2.converged_true', _converged(a, b, sp.config), 'near-identical iterates')
-        tb.ok('X2.diverged_false', not _converged(a, a * 2.0, sp.config), '2x apart iterates')
-        # scale-free: same relative change at 1e6 scale must give the same verdict
-        A = a * 1e6
-        tb.ok('X2.scale_free', _converged(A, A * (1 + 1e-9), sp.config),
-              'criterion must not depend on absolute signal scale')
-    except ImportError:
-        tb.skip('X2.behavioural', 'no _converged() helper exported; source check only')
+    # Behavioural half. This used to import a `_converged()` helper that the solver has
+    # never exported, so it skipped every run and the criterion was only ever grepped for.
+    # The criterion lives inside solve_fixed_point(), so drive it from there instead: no
+    # private API, and a real pass/fail.
+    from spipe.core.core import solve_fixed_point, FixedPointNotConverged
+
+    _cfg = dict(sp.config)
+    _cfg['rtol'], _cfg['atol'], _cfg['max_iter'] = 1e-6, 1e-12, 50
+
+    def _iters_for(scale, k=0.5):
+        """Contraction x -> k*x + (1-k)*target, started one unit away, at a given scale."""
+        target = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64) * scale
+        x, info = solve_fixed_point(lambda v: k * v + (1 - k) * target,
+                                    torch.zeros_like(target), _cfg)
+        return x, info, target
+
+    x1, i1, t1 = _iters_for(1.0)
+    tb.ok('X2.converged_true', bool(i1.get('converged')),
+          f"a contraction must converge: iters={i1.get('iters')}, "
+          f"residual={i1.get('residuals', [float('nan')])[-1]:.3e}, "
+          f"tolerance={i1.get('tolerance'):.3e}")
+    tb.lt('X2.converged_to_the_right_point',
+          float((x1 - t1).abs().max() / t1.abs().max()), 1e-5,
+          'and to the actual fixed point, not merely to a stopped iterate')
+
+    # Scale-free: the SAME relative problem at 1e6x the signal must take the same number of
+    # iterations. A criterion written as an absolute difference would stop later (or never).
+    x2, i2, t2 = _iters_for(1e6)
+    tb.ok('X2.scale_free', i2.get('iters') == i1.get('iters') and bool(i2.get('converged')),
+          f"iters at scale 1 = {i1.get('iters')}, at scale 1e6 = {i2.get('iters')} "
+          f"-- the criterion must not depend on absolute signal scale")
+
+    # And it must not declare victory on iterates that are still far apart: a map whose
+    # 'fixed point' is never approached has to run out of budget and raise.
+    tb.raises('X2.diverged_false',
+              lambda: solve_fixed_point(lambda v: v + 1.0,
+                                        torch.zeros(3, dtype=torch.float64), _cfg),
+              Exception,
+              'x -> x + 1 has no fixed point; the criterion must never be met')
 
     # ---------------- X3 : determinism ------------------------------------
     sp = fresh_spipe()
@@ -329,12 +356,10 @@ def build():
     # ---------------- X11 : main3_diff units -------------------------------
     # Numeric check, not a string check: evaluate the script's own freq variables and
     # beta expression and require a physically sane propagation constant.
+    # _repo_file() resolves 'test1/' (pre-release) or examples/paper/mesh_lumerical/ (released)
     m3 = open(_repo_file('test1', 'main3_diff.py')).read()
     import re
     env = {'pi': math.pi, 'FreeLightSpeed': 299792458.0}
-    for pat in (r'^\s*freq_start\s*,\s*freq_end\s*,\s*freq_num\s*=\s*(.+)$',
-                r'^\s*neff\s*,?.*?=\s*(.+)$'):
-        pass
     # pull in simple module-level scalar constants (e.g. THZ = 1e12) so a fix that
     # introduces a named unit conversion evaluates correctly
     for cm in re.finditer(r'^\s*([A-Za-z_]\w*)\s*=\s*([-+0-9.eE]+)\s*(?:#.*)?$', m3, re.M):

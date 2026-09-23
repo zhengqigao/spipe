@@ -43,10 +43,10 @@ SPARSE_DIM_THRESHOLD = 2048
 
 #: A moderately sized system that is swept over many frequencies (or many time points)
 #: still blows up as a dense ``(T, F, 2N, 2N)`` batch -- an 18x18 mesh over the 100
-#: frequency points of ``test1`` is 120 GB dense but a few MB sparse.  Above this many
+#: frequency points of the paper's mesh deck is 120 GB dense but a few MB sparse.  Above this many
 #: bytes the sparse back end is used even when ``2N`` is below
 #: :data:`SPARSE_DIM_THRESHOLD`, provided the system is at least :data:`SPARSE_MIN_DIM`
-#: wide.  Measured on the same mesh at the 100 frequency points ``test1`` uses::
+#: wide.  Measured on the same mesh at the 100 frequency points that deck uses::
 #:
 #:     mesh      2N   dense batch       dense              sparse
 #:     6x6      672      0.72 GB     0.88 s /  1853 MB   0.40 s /  404 MB
@@ -634,7 +634,10 @@ class Photonic(object):
             from .envelope import simulate_envelope          # local: envelope.py imports this module
             res, middle = simulate_envelope(self, t_value, param_value)
             power = self._power_report(res)
-            return self.pd_array(res), middle, power
+            # Hand PDArray the transient grid: both the coherent sum and the bw= low-pass
+            # need it, and without it each silently degrades (to the incoherent sum and to
+            # no low-pass respectively) behind a warning.
+            return self.pd_array(res, t_value), middle, power
 
         res, middle = Simulate.apply(t_value, param_value, self.omega, self.node_has_ele,
                                         self.srce_node,
@@ -650,7 +653,7 @@ class Photonic(object):
                                         )  # res shape (time_pout, len(omega), dim_pout), but here time_pout = time_pin
         power = self._power_report(res)
 
-        res = self.pd_array(res)  # (tim_pout, dim_pout)
+        res = self.pd_array(res, t_value)  # (tim_pout, dim_pout)
         return res, middle, power
 
     def _power_report(self, res: torch.Tensor) -> Dict:

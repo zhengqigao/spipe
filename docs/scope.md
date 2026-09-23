@@ -67,9 +67,26 @@ It is **wrong** if you read the grid as the Fourier decomposition of one modulat
 where the cross terms *are* the signal.
 
 **Made explicit by:** the `coherent=` option on the `pd` line, which squares the summed
-field and low-passes at the detector bandwidth `bw`. Beat notes above `bw` are removed and
-the expression reduces exactly to the historical incoherent sum, so the two regimes are one
-formula. The default preserves the incoherent behaviour.
+field and low-passes at the detector bandwidth `bw`, so the two regimes are one formula.
+The default preserves the incoherent behaviour.
+
+`coherent=1` needs `bw=` (there is nothing to reject without a pole) and a transient time
+axis, which means a netlist with at least one modulator — a purely passive circuit is a
+single sample and carries no time. Two properties are worth knowing before you read the
+output:
+
+- The reduction to the incoherent sum is **asymptotic, not exact**. A single-pole filter
+  rejects a beat note at `Δf` by roughly `bw / Δf`, so carriers 500× above the bandwidth
+  leave about 1.7 % ripple — measured at 2.5e-2 A on a 1.5 A photocurrent.
+- The low-pass starts from the **first sample**, and at `t = 0` every carrier is in phase
+  by construction, so the coherent photocurrent starts at its fully constructive value
+  (4.5 for three unit channels, against a steady state of 1.5) and decays toward the
+  incoherent value with the detector's own time constant `τ = 1/(2π·bw)`. Discard the
+  first few `τ`, or start the record earlier than the window you care about.
+
+`test/tb/tb03_oe_interface.py` pins both, and also pins that `Photonic` hands the detector
+its time axis at all: before that was wired up, `bw=` and `coherent=` were accepted, warned
+once, and silently fell back to an unfiltered incoherent sum.
 
 ## A worked demonstration of the boundary
 

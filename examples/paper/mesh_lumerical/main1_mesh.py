@@ -46,6 +46,10 @@ file_path = os.environ.get('SPIPE_INTERCONNECT_DIR',
                            os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                         'interconnect'))
 
+#: The INTERCONNECT executable. It is lower case (`interconnect`), unlike Xyce. Check with
+#: `which interconnect`; override with $SPIPE_INTERCONNECT if it is not on PATH.
+INTERCONNECT_EXE = os.environ.get('SPIPE_INTERCONNECT', 'interconnect')
+
 def run_spipe(num_row, num_col, param, source_in, prob_node):
     total = (num_row + 1) * num_col + (num_col + 1) * num_row
 
@@ -115,7 +119,7 @@ def run_interconnect(num_row, num_col, param, source_device, source_node, prob_d
 
     text_lsf = f"""
 clear; switchtodesign; deleteall;
-file_prefix = '{file_path}';
+file_prefix = '{file_path}{os.sep}';   # trailing separator: the lsf concatenates, it does not join
 
 N = {num_row};
 M = {num_col};
@@ -240,12 +244,10 @@ wrk=getresult("ONA_1","input 1/mode 1/transmission");
 t=getattribute(wrk,"TE transmission");
 real_t = real(t);
 image_t = imag(t);
-write("out_real.txt", num2str(real_t), "overwrite");
-write("out_imag.txt", num2str(image_t), "overwrite");
-# matlabsave('{file_path}' + 'out.mat', t);
+write(file_prefix + "out_real.txt", num2str(real_t), "overwrite");
+write(file_prefix + "out_imag.txt", num2str(image_t), "overwrite");
     """
 
-    print(param)
     with open(os.path.join(file_path, 'param.txt'), 'w') as f:
         for i in range(param.shape[0]):
             f.write(f"{param[i, 0]} {param[i, 1]}\n")
@@ -253,15 +255,36 @@ write("out_imag.txt", num2str(image_t), "overwrite");
     with open(os.path.join(file_path, 'photonic.lsf'), 'w') as f:
         f.write(text_lsf)
 
+    out_real = os.path.join(file_path, 'out_real.txt')
+    out_imag = os.path.join(file_path, 'out_imag.txt')
+
+    # Delete last run's answers first. INTERCONNECT can fail (bad licence, a script error
+    # it only prints, no display) and still exit 0, and then these files would be read as
+    # though they were this run's result -- a comparison against stale data that looks
+    # perfectly healthy. Removing them makes that failure loud.
+    for stale in (out_real, out_imag):
+        if os.path.exists(stale):
+            os.remove(stale)
+
     start = time.time()
-    cmd = f"interconnect {os.path.join(file_path, 'photonic.lsf')} -run -exit" # -hide
-    os.system(cmd)
+    cmd = f"{INTERCONNECT_EXE} {os.path.join(file_path, 'photonic.lsf')} -run -exit"
+    status = os.system(cmd)
     run_time = time.time() - start
 
-    real_part = np.loadtxt(os.path.join(file_path, 'out_real.txt'))
-    imag_part = np.loadtxt(os.path.join(file_path, 'out_imag.txt'))
+    missing = [p for p in (out_real, out_imag) if not os.path.exists(p)]
+    if missing:
+        raise RuntimeError(
+            f"INTERCONNECT produced no output (exit status {status}).\n"
+            f"  command : {cmd}\n"
+            f"  expected: {', '.join(missing)}\n"
+            f"Check that `which interconnect` finds it (override with $SPIPE_INTERCONNECT), "
+            f"that a licence is available, and -- on a headless machine -- that "
+            f"QT_QPA_PLATFORM=offscreen is set; INTERCONNECT otherwise dies with 'no Qt "
+            f"platform plugin could be initialized'.")
+
+    real_part = np.loadtxt(out_real)
+    imag_part = np.loadtxt(out_imag)
     result = 1.j * imag_part + real_part
-    print(result.shape)
     return run_time, result
 
 

@@ -116,49 +116,163 @@ def build():
                   'no .grad on the transistor width -- the chain is not differentiable')
 
     # ------------------------------------------------------------------
-    # Path B: the same thing through Circuit + .sensparam, if wired up.
+    # Path B: the same thing through Circuit + .sensparam.
+    #
+    # These used to be grep-the-source checks ("is the string 'sensparam'
+    # present in electronic.py?"), which pass on a comment and would survive
+    # the feature being deleted. They are now behavioural: the parser, the
+    # guards and the implicit differentiation are each *called* and their
+    # answers compared with what they are supposed to produce.
     # ------------------------------------------------------------------
     try:
-        import spipe.core.core as core
-        src = open(_pkg('electronic', 'electronic.py')).read()
-        tb.ok('E2.sensparam_supported', '.sensparam' in src or 'sensparam' in src,
-              'netlist syntax for declaring differentiable device parameters')
+        from spipe.electronic.sensitivity import parse_sensparam
+        deck = ["* driver\n",
+                "MN1 d g 0 0 nch W=8u L=0.5u\n",
+                "RL d vdd 2k\n",
+                ".sensparam MN1:W MN1:L RL:R\n",
+                ".tran 1n 10n\n"]
+        kept, declared = parse_sensparam(deck)
+        # DeviceParameter is a plain (device, PARAM) tuple; the param is upper-cased
+        got = sorted((d.upper(), n.upper()) for d, n in declared)
+        tb.ok('E2.sensparam_parsed',
+              got == [('MN1', 'L'), ('MN1', 'W'), ('RL', 'R')],
+              f"declared {got} from '.sensparam MN1:W MN1:L RL:R'")
+        tb.ok('E2.sensparam_card_consumed',
+              not any('.sensparam' in line.lower() for line in kept),
+              "the .sensparam card must not be passed through to the SPICE deck "
+              f"(kept {len(kept)} of {len(deck)} lines)")
     except Exception as e:
-        tb.ok('E2.sensparam_supported', False, f"{e!r}")
+        tb.ok('E2.sensparam_parsed', False, f"{e!r}")
+        tb.ok('E2.sensparam_card_consumed', False, f"{e!r}")
+
+    # A declared parameter must arrive as a differentiable leaf on the Circuit.
+    try:
+        from spipe.core.core import Circuit
+        link = os.path.join(REPO, 'examples', 'link_driver_mzm.sp')
+        ckt = Circuit(link, spice_exe='native')
+        w = ckt.param('mn1', 'W')
+        tb.ok('E2.declared_param_is_leaf',
+              w.is_leaf and w.requires_grad and w.dtype == torch.float64,
+              f"ckt.param('mn1','W') -> {w.dtype}, leaf={w.is_leaf}, "
+              f"requires_grad={w.requires_grad}")
+    except Exception as e:
+        tb.ok('E2.declared_param_is_leaf', False, f"{e!r}")
 
     # ------------------------------------------------------------------
     # The silent-zero guard. Xyce's transient ADJOINT returns all zeros for
     # device parameters (measured: d_{V(D)}/d_M1:W_adj = 0.0 while direct
-    # gives -4.99695862e+04). An all-zero sensitivity block must RAISE.
+    # gives -4.99695862e+04). Call the guard and check it actually raises --
+    # and, just as important, that it does NOT raise on the two cases where
+    # zero is the right answer.
     # ------------------------------------------------------------------
     try:
-        from spipe.electronic import electronic as E
-        names = [n for n in dir(E) if 'zero' in n.lower() or 'guard' in n.lower()]
-        src = open(_pkg('electronic', 'electronic.py')).read()
-        has_guard = ('all-zero' in src.lower() or 'all zero' in src.lower()
-                     or 'allzero' in src.lower() or bool(names))
-        tb.ok('E2.zero_sensitivity_guard', has_guard,
-              "an identically-zero sensitivity block must raise, not be returned "
-              f"(helpers found: {names})")
+        from spipe.electronic.sensitivity import (guard_all_zero, guard_analysis_ran,
+                                                  ZeroSensitivityError)
+        moving = torch.linspace(0.0, 3.0, 16, dtype=torch.float64)
+        flat = torch.full((16,), 1.5, dtype=torch.float64)
+        zeros = torch.zeros(16, dtype=torch.float64)
+
+        tb.raises('E2.zero_block_raises',
+                  lambda: guard_all_zero(zeros, ['M1:W'], moving, 'adjoint', 'xyce'),
+                  ZeroSensitivityError,
+                  'an identically-zero block under a swinging objective must raise')
+        ok_flat, _ = tb.no_raise(
+            'E2.zero_block_ok_if_objective_constant',
+            lambda: guard_all_zero(zeros, ['M1:W'], flat, 'adjoint', 'xyce'),
+            'a constant objective genuinely has zero sensitivity -- must NOT raise')
+        ok_nz, _ = tb.no_raise(
+            'E2.nonzero_block_passes',
+            lambda: guard_all_zero(torch.full((16,), 1e-30, dtype=torch.float64),
+                                   ['M1:W'], moving, 'direct', 'xyce'),
+            'a genuinely tiny but non-zero gradient is a legitimate answer')
+        tb.raises('E2.zero_objective_raises',
+                  lambda: guard_analysis_ran(zeros, moving, 'adjoint', 'xyce', ['M1:W']),
+                  ZeroSensitivityError,
+                  'sensitivity analysis reporting a zero objective the transient did not')
+        # the error must name the method, since switching method is the fix
+        try:
+            guard_all_zero(zeros, ['M1:W'], moving, 'adjoint', 'xyce')
+            msg = ''
+        except ZeroSensitivityError as e:
+            msg = str(e)
+        tb.ok('E2.zero_message_actionable',
+              'direct' in msg.lower() and 'adjoint' in msg.lower(),
+              f"message must say which method to use instead: {msg[:90]!r}")
     except Exception as e:
-        tb.ok('E2.zero_sensitivity_guard', False, f"{e!r}")
+        tb.ok('E2.zero_block_raises', False, f"{e!r}")
 
     # ------------------------------------------------------------------
     # The fixed point must be differentiated by the implicit function
-    # theorem, not by unrolling.
+    # theorem, not by unrolling. The observable signature is that
+    # solve_coupling_system returns (I - A^T)^-1 b exactly, for a coupling
+    # Jacobian we choose, by whichever path -- and that the answer does not
+    # depend on which path ran.
     # ------------------------------------------------------------------
+    try:
+        from spipe.core.core import solve_coupling_system, CouplingJacobianError
+        import spipe
+
+        def exact(matrix, rhs):
+            """(I - A^T)^-1 b, computed directly."""
+            n = matrix.shape[0]
+            eye = torch.eye(n, dtype=torch.float64)
+            return torch.linalg.solve(eye - matrix.T, rhs)
+
+        torch.manual_seed(0)
+        n = 6
+        a = torch.randn(n, n, dtype=torch.float64) * 0.12      # loop gain well below 1
+        b = torch.randn(n, dtype=torch.float64)
+
+        info = {}
+        got = solve_coupling_system(lambda v: a.T @ v, b, spipe.config, info)
+        want = exact(a, b)
+        tb.lt('E2.ift_matches_closed_form',
+              float((got - want).abs().max() / want.abs().max()), 1e-12,
+              f"(I - A^T)^-1 b over {n} unknowns, mode={info.get('mode')}, "
+              f"rho={info.get('spectral_radius')}")
+
+        # No coupling at all: the answer is b itself, exactly, in one product.
+        info0 = {}
+        got0 = solve_coupling_system(lambda v: torch.zeros_like(v), b, spipe.config, info0)
+        tb.ok('E2.ift_decoupled_exact',
+              bool(torch.equal(got0, b)) and info0.get('vjp_calls') == 1,
+              f"A = 0 must give lam = b bit-for-bit in one product "
+              f"(mode={info0.get('mode')}, calls={info0.get('vjp_calls')})")
+
+        # Path independence: the dense solve and the matrix-free Neumann
+        # iteration must agree. Unrolling would make the answer depend on
+        # how many products were taken; the IFT answer cannot.
+        cfg_mf = dict(spipe.config)
+        cfg_mf['coupling_dense_limit'] = 1          # force the matrix-free path
+        info_mf = {}
+        got_mf = solve_coupling_system(lambda v: a.T @ v, b, cfg_mf, info_mf)
+        tb.lt('E2.ift_path_independent',
+              float((got_mf - got).abs().max() / got.abs().max()), 1e-10,
+              f"dense (mode={info.get('mode')}, {info.get('vjp_calls')} products) vs "
+              f"matrix-free (mode={info_mf.get('mode')}, {info_mf.get('vjp_calls')} "
+              f"products) must give the same gradient")
+
+        # Loop gain >= 1: the fixed point is not stable and the derivative is
+        # unbounded. Returning a number there would be worse than raising.
+        singular = torch.eye(n, dtype=torch.float64)            # A = I  =>  I - A^T = 0
+        tb.raises('E2.ift_singular_raises',
+                  lambda: solve_coupling_system(lambda v: singular.T @ v, b,
+                                                spipe.config, {}),
+                  CouplingJacobianError,
+                  'a singular (I - A^T) must raise rather than return a huge number')
+    except Exception as e:
+        tb.ok('E2.ift_matches_closed_form', False, f"{e!r}")
+
+    # gradient_based_simulate must be implemented or deleted, never left as a
+    # commented-out block that reads like a feature.
     try:
         csrc = open(_pkg('core', 'core.py')).read()
         tb.ok('E2.no_dead_commented_grad_block',
               'def gradient_based_simulate' not in csrc.replace('# ', '')
               or 'def gradient_based_simulate' in csrc,
               'the commented-out gradient_based_simulate must be implemented or deleted')
-        tb.ok('E2.implicit_diff_used',
-              any(k in csrc.lower() for k in
-                  ('implicit', 'ift', 'implicit_function', 'fixed_point_grad')),
-              'fixed-point gradients must use the implicit function theorem, not unrolling')
     except Exception as e:
-        tb.ok('E2.implicit_diff_used', False, f"{e!r}")
+        tb.ok('E2.no_dead_commented_grad_block', False, f"{e!r}")
 
     return tb
 
