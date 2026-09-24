@@ -465,6 +465,26 @@ def _check_ports(name: str, line: str, strings: List[str], ln: int, rn: int, an:
         + f"\n  line: {line}")
 
 
+def _load_params(kind: str, level: str) -> set:
+    """Parameter names of an electrical load level's subcircuit (its `.subckt` header's
+    `key=value` entries), e.g. {'cj', 'rs', 'rsh', 'cpad'} for the modulator's level3."""
+    from spipe.electronic.electronic import ModModel, PdModel
+    registry = PdModel if kind == 'pd' else ModModel
+    text = registry.user_model.get(level) or registry.model.get(level)
+    if not text:
+        return set()
+    header = text.strip().splitlines()[0].split()
+    return {token.split('=')[0].lower() for token in header[2:] if '=' in token}
+
+
+def _without_load_params(kv: Dict, kind: str, level: str) -> Dict:
+    """`kv` without the entries that belong to the electrical load level. They are set on the
+    device line (`mzm0 ... vdrv level3 cj=300f rs=20 ...`) but read by the electronic circuit;
+    the optical model used to reject them as unknown parameters."""
+    names = _load_params(kind, level)
+    return {k: v for k, v in kv.items() if k.lower() not in names}
+
+
 def _check_level(name: str, kind: str, level: str) -> None:
     """The electrical load level must exist; it used to be checked only inside a Circuit."""
     from spipe.electronic.electronic import ModModel, PdModel
@@ -637,6 +657,10 @@ class Photonic(object):
                     matched = True
                     ln, rn = v['num_port']
                     an = v['active_port']
+                    if _entry_is_active(v) and len(strings) == ln + rn + an + 1:
+                        # parameters of the electrical load level (cj=, rs=, ... for level3) are
+                        # for the electronic circuit, not the optical model
+                        kv_pair = _without_load_params(kv_pair, 'mod', strings[-1])
                     _check_device_keys(initial, _model_class(k, v), kv_pair)
                     _check_ports(initial, line, strings, ln, rn, an if _entry_is_active(v) else 0)
 
@@ -720,6 +744,8 @@ class Photonic(object):
                     raise ValueError(f"Detector {initial!r} occurs more than once.")
                 pd_names.add(initial.lower())
                 _check_ports(initial, line, strings, 1, 0, 1, kind='pd')
+                if len(strings) == 3:
+                    kv_pair = _without_load_params(kv_pair, 'pd', strings[-1])
                 _check_pd_args(initial, kv_pair)
                 self.dout_node.append(strings[0])
                 self.pd_args.append(kv_pair)

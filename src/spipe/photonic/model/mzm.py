@@ -115,9 +115,10 @@ class MZM(Device):
     Extinction ratio
     ----------------
     A lossless, perfectly balanced MZI has infinite extinction.  A finite ``er`` (in dB) is
-    obtained from a *static* amplitude imbalance between the two arms::
+    obtained from a *static* amplitude imbalance between the two arms, taken out of the weaker
+    arm so that neither exceeds ``base`` and the device stays passive::
 
-        a1 = base * (1 + eps),   a2 = base * (1 - eps)
+        a1 = base,   a2 = base * (1 - eps) / (1 + eps)
 
     The two arms interfere constructively at one bias and destructively at the other, so the
     measured on/off power ratio of either output port is
@@ -144,7 +145,8 @@ class MZM(Device):
     In silicon, injecting or depleting carriers changes **both** the index and the absorption
     (Soref-Bennett): ``dn`` and ``dalpha`` move together.  The per-arm amplitude is therefore
 
-        a_i = 10**(-il/20) * (1 +- eps) * exp(-0.5 * dalpha_i * act_l)
+        a_1 = 10**(-il/20) * exp(-0.5 * dalpha_1 * act_l)
+        a_2 = 10**(-il/20) * (1 - eps)/(1 + eps) * exp(-0.5 * dalpha_2 * act_l)
 
     with the excess (differential) power attenuation ``dalpha_i`` [1/m] given as a Taylor series in
     the *arm* drive, in the same style as the ``coeff1=, coeff2=, ...`` convention used by ``modm``
@@ -160,7 +162,7 @@ class MZM(Device):
 
     Modulator response time
     -----------------------
-    Optional ``tau`` (seconds, default ``0.0``) lifts the paper's Assumption 1 for this device:
+    Optional ``tau`` (seconds, default ``0.0``) resolves the paper's Assumption 1 for this device:
     the phase then follows ``tau * dphi/dt + phi = pi * (v(t) - vbias) / vpi`` instead of tracking
     the drive instantaneously.  Because the phase is *linear* in the drive, the filter is applied
     once to ``v - vbias`` and everything (phase and loss modulation) is derived from the filtered

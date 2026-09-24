@@ -8,7 +8,7 @@ python test/run_all.py          # single PASS/FAIL verdict
 python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 475 checks, 11 benches
+## Summary: 477 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
@@ -20,7 +20,7 @@ python test/run_all.py --quick  # the fast subset
 | `tb06_native_gradients` | autograd vs adjoint vs finite difference | 59 |
 | `tb07_fixedpoint` | convergence, divergence, bistability, stability of the converged state | 35 |
 | `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
-| `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 126 |
+| `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 128 |
 | `tb11_envelope_P3` | optical memory / envelope propagation, its gradients and its failure checks | 19 |
 | `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain, including electrical probes, detector noise, envelope mode, coarse sampling and multistable loops | 38 |
 

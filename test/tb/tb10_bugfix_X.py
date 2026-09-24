@@ -850,6 +850,25 @@ def build():
         _src24.replace('vdrv level3', 'vdrvv level3')), 'native'), ValueError,
         "a typo in the drive node gave a modulator stuck at 0 V")
 
+    # ---------------- X25 : electrical load parameters on a device line --------------------
+    # `mzm0 ... vdrv level3 cj=300f rs=20` sets the level3 load's own parameters; the optical
+    # model rejected them as unknown (since the unknown-parameter check), so a measured load
+    # could not be entered at all.
+    try:
+        _src25 = open(_repo_file('examples', 'link_driver_mzm.sp')).read().replace(
+            'vdrv level3 vpi=2.0', 'vdrv level3 cj=300f rs=20 vpi=2.0')
+        _p25 = os.path.join(_tf24.mkdtemp(prefix='tb10_x25_'), 'load.sp')
+        open(_p25, 'w').write(_src25)
+        _c25 = sp.Circuit(_p25, 'native')
+        tb.ok('X25.load_params_reach_electronics',
+              any('cj=300f' in l and 'rs=20' in l for l in _c25.e_circuit.native_deck.splitlines()),
+              'cj= and rs= on the modulator line are passed to the level3 subcircuit')
+    except Exception as _e:
+        tb.ok('X25.load_params_reach_electronics', False, repr(_e))
+    tb.raises('X25.unknown_key_still_refused', lambda: sp.Photonic([x + "\n" for x in _b24 + [
+        "mzm0 a1 a2 b1 b2 v level3 cj=300f foo=1"] + _pds]), TypeError,
+        'a key that is neither an optical nor a load parameter is still an error')
+
     return tb
 
 

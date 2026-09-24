@@ -85,11 +85,34 @@ modulator is already slowed by the RC, and how much depends on the driver circui
 designed. This is also what makes the gradient with respect to a transistor width
 meaningful: a wider driver charges the modulator faster, and the optical output shows it.
 
-**Do not model the same slowness twice.** A datasheet usually quotes a single bandwidth. If
-that bandwidth comes from RC charging, which is typical of depletion-mode silicon modulators,
-use the `level3` load and keep `tau` at 0, or at a small value for whatever the device itself
-adds. Setting `tau` to the whole datasheet bandwidth as well would slow the modulator twice.
-Use `tau` alone when the device's own physics limits it, as in a carrier-injection modulator.
+**Setting the two parts from measurements.** A measured step or frequency response shows the
+two causes combined, and one curve alone cannot say which part is which. Separate them by
+measuring the electrical side on its own, then attribute only what is left to the device:
+
+1. **Electrical part first.** Measure the modulator's electrical reflection (S11) with a
+   network analyser at your operating bias, or take its capacitance and series resistance from
+   the datasheet. Fit the load's equivalent circuit to it, and write the values on the device
+   line: `mzm0 a1 a2 b1 b2 vdrv level3 cj=300f rs=20 cpad=20f ...`. These parameters go to the
+   electronic circuit. For a different circuit topology, register your own load level (see
+   [netlist.md](netlist.md)).
+2. **Predict the electrical bandwidth.** With `tau=0`, simulate the modulator driven by the
+   source used in the optical measurement, usually a 50 Ω source, and read off its bandwidth,
+   `f_RC`.
+3. **Compare with the measured electro-optic bandwidth `f_EO`** (the S21 from drive voltage to
+   optical modulation, or the datasheet figure).
+   - If `f_EO ≈ f_RC`, the modulator is RC-limited: keep `tau=0`. This is typical of
+     depletion-mode silicon modulators.
+   - If `f_EO` is clearly lower, the device adds its own response. A rough estimate is
+     `1/f_dev² ≈ 1/f_EO² − 1/f_RC²`, then `tau = 1/(2π·f_dev)`. For an exact split, divide
+     the measured S21 by the RC response and fit a single pole to what remains.
+4. **With only a datasheet bandwidth:** for a depletion-mode modulator, assume it is
+   RC-limited and adjust `cj` until the simulated bandwidth with a 50 Ω source matches. For a
+   carrier-injection modulator, whose carriers are the slow part, use `tau` alone.
+
+Do not put the whole measured bandwidth into `tau` on top of a realistic load: that models the
+same slowness twice. Splitting it this way also keeps the model right when the driver
+changes, which is the point of simulating the driver at all. A single `tau` fitted to the
+total bandwidth is right only for the driver it was measured with.
 
 ## Assumption 2: the photonic network settles instantly
 
