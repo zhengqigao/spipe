@@ -29,6 +29,14 @@ covers resistors, inductors, capacitors, independent and controlled sources, dio
 level-1 MOSFETs and switches, with DC and transient analysis, Newton–Raphson with damping,
 and local-truncation-error-based adaptive time stepping.
 
+The device models are deliberately simple, and the engine refuses rather than approximates
+anything beyond them. MOSFETs are `LEVEL=1` (Shichman–Hodges); BJTs are Gummel–Poon
+(`LEVEL=1`, or no `LEVEL`). A foundry card asking for BSIM, PSP or VBIC — `LEVEL=9` or `12`
+on a BJT, as in the IHP SG13G2 PDK — is an error that tells you to use Xyce or HSPICE.
+Gummel–Poon parameters the engine does not implement (series resistances `RB`/`RC`/`RE`,
+high-level injection `IKF`/`IKR`) are ignored with a warning naming them, because they do
+change the answer.
+
 It reproduces closed-form solutions to machine precision and matches HSPICE and Xyce on
 identical netlists — see [validation.md](validation.md). A useful anchor: for `VTO=0.7
 KP=120u W=20u L=1u LAMBDA=0`, `Vgs=1.2` into a 20 kΩ load from 3.0 V, HSPICE, Xyce and the

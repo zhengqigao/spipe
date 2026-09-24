@@ -388,6 +388,65 @@ def build():
         except Exception as e:
             tb.ok('X11.beta_physical', False, f"could not evaluate: {e!r}")
 
+    # ---------------- X13 : the native BJT refuses what it cannot model -----
+    # The Gummel-Poon builder routed every .model parameter through an alias table and
+    # silently dropped the rest -- LEVEL included. A VBIC HBT card (LEVEL=12, as in the IHP
+    # SG13G2 PDK) therefore ran as Gummel-Poon and returned 187 uA where VBIC gives 593 uA:
+    # 3.2x wrong, no warning. No bench exercised a BJT at all, which is how it survived.
+    import warnings as _w
+    from spipe.electronic.native import Netlist as _NL
+    from spipe.electronic.native.units import SpiceSyntaxError as _SSE
+
+    _bjt = ("* bjt\nVcc c 0 1.5\nVbe b 0 0.85\nRc c cc 1k\nQ1 cc b 0 nq\n"
+            ".model nq npn {p}\n.op\n.end\n")
+
+    def _bjt_op(params):
+        ck = _NL.from_string(_bjt.format(p=params))
+        return ck.op() if hasattr(ck, 'op') else ck.dc()
+
+    for lvl in ('9', '12', '99'):
+        tb.raises(f'X13.bjt_rejects_level_{lvl}',
+                  lambda lvl=lvl: _bjt_op(f'level={lvl} is=1e-18 bf=800'), _SSE,
+                  f'LEVEL={lvl} is not Gummel-Poon and must be refused, not silently solved')
+
+    ok1, op1 = tb.no_raise('X13.bjt_level1_accepted',
+                           lambda: _bjt_op('level=1 is=1e-18 bf=800'),
+                           'LEVEL=1 is Gummel-Poon and must still run')
+    ok0, op0 = tb.no_raise('X13.bjt_no_level_accepted',
+                           lambda: _bjt_op('is=1e-18 bf=800'),
+                           'no LEVEL means Gummel-Poon and must still run')
+    if ok1 and ok0 and op1 is not None and op0 is not None:
+        tb.close('X13.bjt_level1_same_as_default', float(op1.v('cc')), float(op0.v('cc')),
+                 0.0, rel=False, detail='LEVEL=1 and no LEVEL are the same model')
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter('always')
+        try:
+            _bjt_op('is=1e-18 bf=800 rb=100 ikf=1e-3')
+        except Exception:
+            pass
+    msgs = ' | '.join(str(c.message) for c in caught)
+    tb.ok('X13.bjt_warns_unmodelled_params', 'RB' in msgs and 'IKF' in msgs,
+          f"RB and IKF change the answer on a real deck; ignoring them must be visible: "
+          f"{msgs[:110]!r}")
+
+    # Closed form. With the node voltages solved, the collector current is fixed by the
+    # Gummel-Poon constitutive law alone, and KCL says it all flows through Rc:
+    #   Ic = IS*(exp(Vbe/Vt) - exp(Vbc/Vt)) - (IS/BR)*(exp(Vbc/Vt) - 1)
+    # at NF = NR = 1, VAF = VAR = 0. This is the first check of the BJT's physics anywhere.
+    if ok0 and op0 is not None:
+        _k, _q = 1.380649e-23, 1.602176634e-19
+        vt = _k * (273.15 + 27.0) / _q
+        IS, BR = 1e-18, 1.0
+        vc = float(op0.v('cc'))
+        vbe, vbc = 0.85, 0.85 - vc
+        ic_law = (IS * (math.exp(vbe / vt) - math.exp(vbc / vt))
+                  - (IS / BR) * (math.exp(vbc / vt) - 1.0))
+        ic_kcl = (1.5 - vc) / 1e3
+        tb.close('X13.bjt_gummel_poon_closed_form', ic_kcl, ic_law, 1e-6,
+                 detail=f"Ic through Rc = {ic_kcl * 1e6:.4f} uA vs the Gummel-Poon law "
+                        f"at the solved Vbc = {vbc:.4f} V (forward active)")
+
     return tb
 
 

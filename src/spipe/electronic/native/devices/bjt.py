@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import warnings
+
 import torch
 
 from ..units import SpiceSyntaxError, eval_expr
 from .base import DTYPE, Device, DeviceGroup, limexp, pnjlim
 
 __all__ = ["BJT"]
+
+#: (model, ignored-parameter set) pairs already warned about, so a model used by many
+#: instances warns once rather than once per device.
+_WARNED_IGNORED = set()
 
 _DEFAULTS = {
     "IS": 1e-16, "BF": 100.0, "BR": 1.0, "NF": 1.0, "NR": 1.0,
@@ -81,7 +87,27 @@ class BJT(DeviceGroup):
     def build(cls, elem, circuit):
         mp = circuit.model_params(elem.model, ("npn", "pnp"), elem.name)
         mtype = circuit.model_type(elem.model)
+
+        # A BJT card's LEVEL selects the compact model, and this engine has exactly one:
+        # Gummel-Poon, which is LEVEL=1 (or no LEVEL) in every SPICE dialect. LEVEL=9 and 12
+        # are VBIC, which foundry PDKs such as IHP SG13G2 use. Accepting those and quietly
+        # solving Gummel-Poon instead is how a VBIC HBT that carries 593 uA came out at
+        # 187 uA -- 3.2x wrong, no warning. The MOSFET builder has always refused an
+        # unsupported LEVEL; the BJT now does the same.
+        if "level" in mp:
+            try:
+                level = float(mp["level"])
+            except (TypeError, ValueError):
+                level = None
+            if level != 1.0:
+                raise SpiceSyntaxError(
+                    "device %s uses .model %s with LEVEL=%s; the native engine implements "
+                    "the Gummel-Poon BJT (LEVEL=1) only. LEVEL=9/12 is VBIC -- simulate that "
+                    "with spice_exe='xyce' or 'hspice'."
+                    % (elem.name, elem.model, mp["level"]))
+
         vals = dict(_DEFAULTS)
+        ignored = []
         for k, v in mp.items():
             key = _ALIASES.get(k)
             if key:
@@ -89,6 +115,24 @@ class BJT(DeviceGroup):
                     vals[key] = float(v)
                 except (TypeError, ValueError):
                     pass
+            elif k != "level":
+                ignored.append(k.upper())
+
+        # Parameters this model does not implement (IKF, RB, RC, RE, the VBIC set, ...) are
+        # still ignored -- a real foundry card carries dozens that are harmless to drop, and
+        # refusing them would make ordinary decks unusable. But they are no longer ignored
+        # *silently*: RB=100 on a real deck changes the answer, and the user should know.
+        if ignored:
+            key = (elem.model, tuple(sorted(ignored)))
+            if key not in _WARNED_IGNORED:
+                _WARNED_IGNORED.add(key)
+                warnings.warn(
+                    "BJT .model %s: the native engine's Gummel-Poon model does not implement "
+                    "%s, so %s ignored. The result may differ from a simulator that does "
+                    "(for series resistances and high-level injection, noticeably)."
+                    % (elem.model, ", ".join(sorted(ignored)),
+                       "it is" if len(ignored) == 1 else "they are"),
+                    RuntimeWarning, stacklevel=2)
         if elem.args:
             try:
                 vals["AREA"] = eval_expr(elem.args[0], elem.params)
