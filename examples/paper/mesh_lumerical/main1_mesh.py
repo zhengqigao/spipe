@@ -42,9 +42,20 @@ uniform_wg_l = 250e-6
 linewidth = 2
 font_size = 18
 
-file_path = os.environ.get('SPIPE_INTERCONNECT_DIR',
-                           os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                        'interconnect'))
+# INTERCONNECT rewrites the project it runs in (it re-saves untitled.ich), so by default it
+# runs in a scratch copy of interconnect/, never in the repository. Set $SPIPE_INTERCONNECT_DIR
+# to run in a folder of your choice instead.
+if os.environ.get('SPIPE_INTERCONNECT_DIR'):
+    file_path = os.environ['SPIPE_INTERCONNECT_DIR']
+else:
+    import shutil, tempfile
+    file_path = os.path.join(tempfile.mkdtemp(prefix='spipe_interconnect_'), 'interconnect')
+    shutil.copytree(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interconnect'),
+                    file_path)
+
+#: Seconds to wait for one INTERCONNECT run. Without a limit, a licence server that never
+#: answers hangs the script forever. Override with $SPIPE_INTERCONNECT_TIMEOUT.
+INTERCONNECT_TIMEOUT = float(os.environ.get('SPIPE_INTERCONNECT_TIMEOUT', 1800))
 
 #: The INTERCONNECT executable. It is lower case (`interconnect`), unlike Xyce. Check with
 #: `which interconnect`; override with $SPIPE_INTERCONNECT if it is not on PATH.
@@ -268,7 +279,14 @@ write(file_prefix + "out_imag.txt", num2str(image_t), "overwrite");
 
     start = time.time()
     cmd = f"{INTERCONNECT_EXE} {os.path.join(file_path, 'photonic.lsf')} -run -exit"
-    status = os.system(cmd)
+    import shlex, subprocess
+    try:
+        status = subprocess.run(shlex.split(cmd), timeout=INTERCONNECT_TIMEOUT).returncode
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"INTERCONNECT did not finish within {INTERCONNECT_TIMEOUT:.0f} s ({cmd}). The usual "
+            f"cause is a licence server that does not answer. Raise the limit with "
+            f"$SPIPE_INTERCONNECT_TIMEOUT if your meshes are simply large.") from None
     run_time = time.time() - start
 
     missing = [p for p in (out_real, out_imag) if not os.path.exists(p)]

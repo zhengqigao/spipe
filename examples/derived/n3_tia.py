@@ -85,7 +85,7 @@ import torch
 from _common import (add_common_arguments, banner, report_convergence, resolve_spice_exe,
                      set_config, work_dir, write_netlist)
 
-from spipe import Circuit, config, electronic_register, electronic_rest
+from spipe import Circuit, config, electronic_register, electronic_reset
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -210,7 +210,7 @@ def main() -> int:
     spice_exe = resolve_spice_exe(args)
     set_config(args, max_iter=20)
 
-    electronic_rest()
+    electronic_reset()
     electronic_register('pd', 'level4', PD_LEVEL4)
     with open(os.path.join(directory, 'pd_level4.sub'), 'w') as handle:
         handle.write(PD_LEVEL4)

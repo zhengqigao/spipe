@@ -39,6 +39,7 @@ from .photonic.register import reset as photonic_reset
 from .photonic.register import register as photonic_register
 from .photonic.photonic import Photonic
 
-from .electronic import reset as electronic_rest
+from .electronic import reset as electronic_reset
+electronic_rest = electronic_reset  # misspelt name kept so older scripts still import
 from .electronic import register as electronic_register
 from .electronic import Electronic

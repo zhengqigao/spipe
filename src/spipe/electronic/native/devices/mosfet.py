@@ -9,6 +9,9 @@ than 1 is rejected rather than silently mis-simulated.
 
 from __future__ import annotations
 
+import difflib
+import warnings
+
 import torch
 
 from ..units import SpiceSyntaxError, eval_expr
@@ -35,6 +38,28 @@ _MODEL_ALIASES = {
     "cgso": "CGSO", "cgdo": "CGDO", "cgbo": "CGBO",
     "cbd": "CBD", "cbs": "CBS",
 }
+
+
+#: Standard SPICE MOSFET instance keywords this model accepts but does not use. Anything
+#: else on an instance card is almost certainly a typo (``WW=20u`` would otherwise fall
+#: back to the 100 um default width), so it is an error.
+_INST_UNUSED = {"PD", "PS", "NRD", "NRS", "NRB", "NF", "SA", "SB", "SD", "SCA", "SCB",
+                "SCC", "DTEMP", "TEMP", "OFF", "IC", "DELVTO", "MULU0", "GEO", "RGEOMOD"}
+
+#: (model or instance, ignored-parameter set) pairs already warned about.
+_WARNED_IGNORED = set()
+
+
+def _warn_ignored(what, ignored):
+    key = (what, tuple(sorted(ignored)))
+    if key in _WARNED_IGNORED:
+        return
+    _WARNED_IGNORED.add(key)
+    warnings.warn(
+        "MOSFET %s: the native engine's level-1 model does not implement %s, so %s "
+        "ignored. The result may differ from a simulator that does."
+        % (what, ", ".join(sorted(ignored)), "it is" if len(ignored) == 1 else "they are"),
+        RuntimeWarning, stacklevel=3)
 
 
 def _leaf(v):
@@ -73,7 +98,11 @@ class Mosfet(DeviceGroup):
     ============ ======== ==================================================
 
     Instance parameters: ``W`` (1e-4 m), ``L`` (1e-4 m), ``M`` (multiplier),
-    ``AD``/``AS`` (accepted, unused).
+    ``AD``/``AS`` (accepted, unused).  Other standard SPICE instance keywords
+    (``PD``, ``PS``, ``NRD``, ``NF``, ...) are ignored with a warning; any other
+    keyword is an error, so a typo such as ``WW=20u`` cannot silently fall
+    back to the default width.  Model parameters this model does not implement
+    are ignored with a warning.
 
     Both polarities and all three regions (cutoff / triode / saturation) are
     implemented, with the drain/source role swap for ``Vds < 0`` so that the
@@ -95,6 +124,7 @@ class Mosfet(DeviceGroup):
         mtype = circuit.model_type(elem.model)
         vals = dict(_MODEL_DEFAULTS)
         vals.update(_INST_DEFAULTS)
+        ignored = []
         for k, v in mp.items():
             key = _MODEL_ALIASES.get(k)
             if key:
@@ -102,12 +132,31 @@ class Mosfet(DeviceGroup):
                     vals[key] = float(v)
                 except (TypeError, ValueError):
                     pass
+            else:
+                ignored.append(k.upper())
+        # A real foundry card carries parameters level 1 has no use for; they are dropped,
+        # but not silently (RD=1k changes the answer).
+        if ignored:
+            _warn_ignored(".model %s" % elem.model, ignored)
+        unused = []
         for k, v in elem.kwargs.items():
             key = k.upper()
             if key in _INST_DEFAULTS:
                 vals[key] = eval_expr(v, elem.params)
             elif _MODEL_ALIASES.get(k):
                 vals[_MODEL_ALIASES[k]] = eval_expr(v, elem.params)
+            elif key in _INST_UNUSED:
+                unused.append(key)
+            else:
+                known = sorted(_INST_DEFAULTS) + sorted(_INST_UNUSED)
+                close = difflib.get_close_matches(key, known, n=1)
+                raise SpiceSyntaxError(
+                    "MOSFET %s: unknown instance parameter %s=%s%s. The native engine "
+                    "uses W, L, M, AD and AS (and model parameters such as VTO)."
+                    % (elem.name.upper(), key, v,
+                       " (did you mean %s?)" % close[0] if close else ""))
+        if unused:
+            _warn_ignored("instance %s" % elem.name, unused)
         # positional  W L  (rare, but legal in some dialects)
         if elem.args and "W" not in elem.kwargs:
             try:

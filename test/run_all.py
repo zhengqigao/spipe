@@ -78,6 +78,7 @@ def main():
     have_cad = cad_available()
     total_pass = total_fail = total_skip = 0
     failed_benches = []
+    not_run = []   # (bench, reason) -- whole benches, whose checks are not in any count above
     t0 = time.time()
 
     print(f"SPIPE acceptance suite  ({sys.executable})")
@@ -88,11 +89,12 @@ def main():
         if not os.path.exists(path):
             print(f"  {name:<26} MISSING"); failed_benches.append(name); continue
         if args.quick and slow:
-            print(f"  {name:<26} skipped (--quick)"); continue
+            print(f"  {name:<26} skipped (--quick)")
+            not_run.append((name, '--quick')); continue
         if name == 'tb05_native_crosstool' and not have_cad:
             print(f"  {name:<26} skipped  -- needs Xyce or HSPICE; neither is on PATH")
             print(f"  {'':<26}            check with:  which Xyce   /   which hspice")
-            continue
+            not_run.append((name, 'needs Xyce or HSPICE')); continue
 
         r = subprocess.run([sys.executable, path], capture_output=True, text=True, env=env)
         m = None
@@ -125,6 +127,9 @@ def main():
     verdict = 'PASS' if not failed_benches else 'FAIL'
     print(f"  {verdict}: {total_pass} passing, {total_fail} failing, {total_skip} skipped "
           f"({time.time() - t0:.0f}s)")
+    if not_run:
+        print(f"  NOT RUN: {len(not_run)} whole bench(es), so their checks are not counted above: "
+              + ', '.join(f'{n} ({why})' for n, why in not_run))
     if failed_benches:
         print(f"  benches with failures: {', '.join(failed_benches)}")
     return 1 if failed_benches else 0

@@ -35,7 +35,9 @@ anything beyond them. MOSFETs are `LEVEL=1` (Shichman–Hodges); BJTs are Gummel
 on a BJT, as in the IHP SG13G2 PDK — is an error that tells you to use Xyce or HSPICE.
 Gummel–Poon parameters the engine does not implement (series resistances `RB`/`RC`/`RE`,
 high-level injection `IKF`/`IKR`) are ignored with a warning naming them, because they do
-change the answer.
+change the answer. The same goes for MOSFET model parameters that level 1 lacks (`RD`,
+`RS`, ...). A misspelled MOSFET instance parameter is an error: `WW=20u` would otherwise run
+with the default 100 µm width.
 
 It reproduces closed-form solutions to machine precision and matches HSPICE and Xyce on
 identical netlists — see [validation.md](validation.md). A useful anchor: for `VTO=0.7
@@ -44,6 +46,20 @@ textbook square law all give `v(d) = 0.138384`, and so does SPIPE.
 
 It is also the only backend that differentiates exactly, because a device parameter is a
 PyTorch tensor there rather than a number in a text file.
+
+**It is slower than Xyce.** Here is one co-simulation of a two-stage CMOS driver into an `mzm`
+and a detector, with 161 samples over 1.6 ns and two `.sensparam` widths. It was measured on
+a shared server that was busy with other work, so treat the absolute times as rough;
+the ratios are what matter:
+
+| backend | plain run | run + `backward()` |
+|---|---|---|
+| built-in | 33 s | 91 s |
+| Xyce | 3.6 s | 16 s |
+
+Most of the time goes into the Newton solves, and a fixed-point co-simulation repeats the
+electronic transient several times. Use Xyce while you explore a design. Use the built-in
+engine when you need exact gradients, or when Xyce is not installed.
 
 ## Time-step accuracy of the built-in engine
 
@@ -76,6 +92,15 @@ spipe.config['native_nsub'] = 32
 
 or give `.tran` more output points, which also lets the modulator see the drive more often.
 A run that rings or shows a slow tail right after a fast edge is the symptom to look for.
+
+**Detector outputs are the worst case.** A detector's output node usually has a time constant
+of picoseconds (2 fF behind 1 kΩ plus the load), far below the spacing of the output
+samples. There the trapezoidal rule does not settle: each change of photocurrent leaves a tail of
+roughly `R · τ · ΔI / Δt` that only shrinks to about a third of itself per sample, where it should vanish at once. In the example above,
+with `.print tran v(vo1)` added, the "0" level after a 500 V pulse reads 1.98, 0.73, 0.28 V
+over the next samples, where the converged answer (`native_nsub = 64`) is 1.95, 0, 0. The
+photocurrent itself and the modulator drive are not affected. If you read a detector's
+*voltage*, fix `native_nsub` at 64 (the table above shows what that costs).
 
 ## A trap worth knowing about Xyce
 

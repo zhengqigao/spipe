@@ -19,8 +19,11 @@ INTERCONNECT results are stored in `test/ref/lumerical_mesh.json`. The automated
 | `interconnect/` | the INTERCONNECT project `main1_mesh.py` drives. `circuit.lsf` is a standalone version of the generated script; `untitled.ich` is the compound-element library it instantiates. |
 | `lumerical_files/` | the INTERCONNECT project behind the paper's figure, kept for reproduction: `circuit2.icp` is the schematic, `circuit2.lsf` the script that sweeps it, and `circuit2_real.txt` / `circuit2_imag.txt` the response it produced. No Python here reads them — they are archival, for opening in the INTERCONNECT GUI. |
 
-Running `main1_mesh.py` writes `photonic.lsf`, `param.txt` and `out_*.txt` into
-`interconnect/`. Those are regenerated every run and are gitignored.
+`main1_mesh.py` runs INTERCONNECT in a scratch copy of `interconnect/`, because INTERCONNECT
+re-saves the project it runs in. Set `$SPIPE_INTERCONNECT_DIR` to run in a folder of your
+choice instead. Each INTERCONNECT run is given 30 minutes (`$SPIPE_INTERCONNECT_TIMEOUT`, in
+seconds), so a licence server that never answers stops the script with a message instead of
+hanging it.
 
 ## Running the full study
 
@@ -36,11 +39,12 @@ export QT_QPA_PLATFORM=offscreen
 ```
 
 or INTERCONNECT exits with "no Qt platform plugin could be initialized". Set
-`$SPIPE_INTERCONNECT` if it is not on `PATH`, and `$SPIPE_INTERCONNECT_DIR` to run
-somewhere other than `interconnect/`.
+`$SPIPE_INTERCONNECT` if it is not on `PATH`.
 
 Be aware that the default sweep runs INTERCONNECT a hundred times on meshes up to 30×30,
-which takes hours. `--num_exp 1` is the quick version.
+which takes hours. `--num_exp 1` is the quick version. `main3_diff.py` is slow for the same
+reason, because it checks every phase shifter by finite differences; `--max_size 9` stops its sweep
+at 9×9.
 
 ## A note on the frequency grid
 

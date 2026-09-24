@@ -7,6 +7,8 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
+import weakref
 from spipe.utils import extract, convert
 import numpy as np
 import torch
@@ -41,7 +43,7 @@ class BaseModel(object):
     def register(cls, level: str, model_str: str) -> None:
         if level in cls.model.keys():
             raise RuntimeError(f"'{level}' is already defined for {cls.name}."
-                               f" Please use another integer level.")
+                               f" Please register it under another name, e.g. 'level{len(cls.model) + len(cls.user_model) + 1}'.")
         cls.user_model[level] = model_str
 
     @classmethod
@@ -162,6 +164,47 @@ def _is_detector(p_line: str) -> bool:
     still recognised by their ``pd`` prefix -- the same rule the photonic parser uses.
     """
     return _element_name(p_line).lower().startswith('pd')
+
+
+#: terminals of each built-in device between which a DC current can flow
+_DC_TERMINALS = {'r': (0, 1), 'l': (0, 1), 'v': (0, 1), 'e': (0, 1), 'h': (0, 1),
+                 'd': (0, 1), 's': (0, 1), 'w': (0, 1), 'm': (0, 2), 'q': (0, 1, 2)}
+
+
+def _check_photocurrent_dc_path(elements, blocks, p_content) -> None:
+    """Refuse a photodetector whose current has no DC path to ground.
+
+    A detector injects a current. If the node it flows into reaches ground only through
+    capacitors, that current charges them forever: the built-in engine either fails to converge
+    or -- worse -- runs and returns a detector voltage of hundreds of kilovolts. SPICE itself
+    rejects a node with no DC path to ground; this names the fix (a load resistor).
+    """
+    ground = {'0', 'gnd', 'gnd!', 'ground'}
+    adjacency: Dict[str, set] = {}
+    for el in elements:
+        idx = _DC_TERMINALS.get(el.letter)
+        if idx is None:
+            continue
+        nodes = [el.nodes[i] for i in idx if i < len(el.nodes)]
+        for u in nodes:
+            adjacency.setdefault(u, set()).update(n for n in nodes if n != u)
+    for instance, plus, minus in blocks:
+        for node in (plus, minus):
+            if node.lower() in ground:
+                continue
+            seen, stack = {node}, [node]
+            while stack:
+                for nxt in adjacency.get(stack.pop(), ()):
+                    if nxt not in seen:
+                        seen.add(nxt); stack.append(nxt)
+            if not seen & ground:
+                index = int(instance.rsplit('_', 1)[-1])
+                p_line = p_content[index].strip() if index < len(p_content) else instance
+                out = extract(p_line)[1][_model_dict['pd'][1]] if index < len(p_content) else '?'
+                raise ValueError(
+                    f"photodetector '{p_line}': its output node {out!r} has no DC path to "
+                    f"ground, so the photocurrent would charge a capacitor without limit. Add a "
+                    f"load, e.g. 'Rload {out} 0 1k', or a transimpedance amplifier.")
 
 
 def _process_spice_wrk_dir(spice_wrk_dir: str) -> None:
@@ -481,10 +524,11 @@ class Electronic(object):
                  num_time_ein: int,
                  power_node: Optional[List] = None,
                  use_adjoint: Optional[bool] = False,
-                 spice_wrk_dir: Optional[str] = './tmp',
+                 spice_wrk_dir: Optional[str] = None,
                  spice_file_name: Optional[str] = 'tmp_sim.sp',
                  param_file_name: Optional[str] = 'param.txt',
                  keep_spice: Optional[bool] = False,
+                 include_dir: Optional[str] = None,
                  ) -> None:
         # E2.1: '.sensparam DEV:PARAM ...' declares the electronic device parameters this
         # netlist is differentiable with respect to.  It is stripped here, before any back end
@@ -498,8 +542,17 @@ class Electronic(object):
         self.mod_identifier = []
         self.pd_cnt = 0
 
+        # With no directory given, every instance gets its own scratch directory, removed when
+        # the instance is garbage collected, so two runs never share (and clobber) one deck and
+        # nothing is left in the caller's working directory. Pass a directory to keep the files.
+        if spice_wrk_dir is None:
+            spice_wrk_dir = tempfile.mkdtemp(prefix='spipe_')
+            weakref.finalize(self, shutil.rmtree, spice_wrk_dir, True)
         _process_spice_wrk_dir(spice_wrk_dir)
         self.spice_wrk_dir = spice_wrk_dir
+        #: relative ``.include`` / ``.lib`` paths in the deck resolve against this directory
+        #: (the netlist's own directory when called through Circuit) on the built-in engine
+        self.include_dir = os.path.abspath(include_dir) if include_dir else os.getcwd()
         self.spice_file_path = os.path.join(spice_wrk_dir, spice_file_name)
         self.param_file_name, self.param_file_path = param_file_name, os.path.join(spice_wrk_dir, param_file_name)
 
@@ -1066,7 +1119,8 @@ class Electronic(object):
         with open(self.spice_file_path, 'w') as f:
             f.write(text)
 
-        self._native = Netlist(text, os.path.abspath(self.spice_wrk_dir))
+        self._native = Netlist(text, self.include_dir)
+        _check_photocurrent_dc_path(self._native.parsed.elements, blocks, self.p_content)
 
         # X4 of the native engine: a co-simulation fixed point re-solves the electronic side
         # every iteration and does not need 1e-8 LTE, so relax the step controller unless the

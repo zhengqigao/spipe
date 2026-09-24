@@ -572,6 +572,8 @@ class Photonic(object):
         default_ng = self.mode_info.get('ng', self.mode_info.get('neff', 1.0))
 
         adjacency = defaultdict(list)
+        #: ``{device: (delay_s, length_m)}``, so a warning can say where the delay comes from
+        self._device_delays = {}
         for ele, attr in itertools.chain(self.circuit_element.items(), self.mod_element.items()):
             entry = _match(ele, model_table)
             if entry is None:
@@ -584,6 +586,8 @@ class Photonic(object):
             except (TypeError, ValueError):
                 ng = 1.0
             delay = ng * length / FreeLightSpeed
+            if delay > 0:
+                self._device_delays[ele] = (delay, length)
 
             for left in attr['ln']:
                 for right in attr['rn']:
@@ -668,13 +672,26 @@ class Photonic(object):
         # group delay at the simulated carriers (sees resonators: a ring's photon lifetime is its
         # round trip times its finesse, which no path length shows -- 1.8 ps vs 279 ps on a
         # high-Q ring, and the check used to stay silent).
-        tau = max(self.max_group_delay(), self.carrier_group_delay())
+        path_tau, carrier_tau = self.max_group_delay(), self.carrier_group_delay()
+        tau = max(path_tau, carrier_tau)
 
         if tau > 0.1 * dt:
+            if path_tau >= carrier_tau:
+                top = sorted(getattr(self, '_device_delays', {}).items(),
+                             key=lambda kv: -kv[1][0])[:3]
+                where = ("It comes from the longest light path; the largest single-device delays "
+                         "are " + ", ".join(f"{name} {d:.3g} s (optical length {l:.3g} m)"
+                                             for name, (d, l) in top) +
+                         ". A device given no length uses its default (for example a modulator's "
+                         "act_l). ") if top else ""
+            else:
+                where = ("It is the group delay measured at the simulated carriers, which is "
+                         "dominated by a resonance (a ring's photon lifetime), not a path length. ")
             warnings.warn(
                 f"Quasi-static assumption is being stretched: the estimated maximum optical group "
                 f"delay of the photonic network is {tau:.6g} s, which is more than 10% of the "
                 f"transient time step dt = {dt:.6g} s (max_group_delay / dt = {tau / dt:.6g}). "
+                f"{where}"
                 f"SPIPE solves the photonic network in steady state at every time sample, which "
                 f"assumes the optical network settles instantaneously, i.e. "
                 f"max_group_delay << dt. Run with simulate(..., mode='envelope') to keep the "

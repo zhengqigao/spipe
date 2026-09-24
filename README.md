@@ -104,7 +104,9 @@ Every directive and device is defined in **[docs/netlist.md](docs/netlist.md)**.
 `Photonic` solves the optical network and you supply the modulator drive yourself, as
 above. `Circuit` additionally runs the electronics, feeds the photocurrents back, and
 iterates until the two domains agree — so it also returns the electrical probes and the
-converged drive. Both are called `simulate()`.
+converged drive. Both are called `simulate()`. The electrical probes are the node voltages
+named on a `.print tran v(node) ...` line, keyed `'v(node)'`; without that line `probes_e`
+is empty.
 
 ## End-to-end differentiability
 
@@ -194,8 +196,8 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**391 checks, and the exit status is 0 only if every one passed**, so it drops straight
-into CI. `--quick` runs the fast ~250 of them in under a minute. Almost all of it needs
+**408 checks, and the exit status is 0 only if every one passed**, so it drops straight
+into CI. `--quick` runs the fast ~280 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:

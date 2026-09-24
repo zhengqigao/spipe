@@ -31,7 +31,7 @@ at exactly those nodes — there is no explicit "connect" statement.
 |---|---|
 | `.mode neff=<n> ng=<n> wl=<m>` | the waveguide mode. `neff` is the effective index (sets phase), `ng` the group index (sets delay), `wl` the reference wavelength in metres. Devices inherit these unless they override them. |
 | `.freq <start> <stop> <count>` | optical frequencies to solve at, in Hz. `count = 1` is a single CW carrier. More than one point means that many **independent** channels — see *Incoherent by default* below. The grid is available afterwards as `Photonic(...).omega`, in rad/s. With `count = 1` only `start` is used. |
-| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. Optional `power=<W>` and `eff=<0..1>` add a power budget (see below). One amplitude per node, applied to every `.freq` channel alike. |
+| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. `|A|²` is optical power in **watts** — a detector with `r0=1` (A/W) turns `1.0@a1` into 1 A of photocurrent, so a realistic 1 mW laser is `0.0316@a1`. Optional `power=<W>` and `eff=<0..1>` add a power budget (see below). One amplitude per node, applied to every `.freq` channel alike. |
 | `.prob <node>` | also report the complex optical field at `<node>`, without disturbing it. Each probe returns the two waves at that node: index 0 travels **into**, index 1 **out of**, the first device listed on that node. Without any `.prob` line the `probes` dict comes back empty. |
 
 `.prob` is spelled without the final `e`.
@@ -61,7 +61,7 @@ are driven by a voltage:
 
 | prefix | ports | what it is | key parameters |
 |---|---|---|---|
-| `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=` |
+| `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0, default 2), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=`; less common: `act_l=`, `kappa1=`, `kappa2=`, `wgu_l=`, `wgl_l=`, `dacoeff0=`… (see below) |
 | `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
 | `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
 | `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W, `bw=` bandwidth in Hz, `idark=`, `coherent=1` |
@@ -75,6 +75,15 @@ between the two arms, which is what limits extinction. The weaker arm carries
 the requested on/off ratio, and the device stays passive. The imbalance costs light, as it
 does in a real device. With a finite `er`, peak transmission is `10^(−il/10) / (1 + ε)²`:
 about 2.4 dB below `il` at `er = 10`, 0.8 dB at 20, and 0.3 dB at 30.
+
+The less common `mzm` parameters, with their defaults:
+
+| parameter | default | meaning |
+|---|---|---|
+| `act_l=` | 1 mm | active length. The phase swing is set by `vpi`, so `act_l` only scales the drive-dependent loss (`dacoeff*`). But it counts toward the circuit's **optical delay**, so a 1 mm modulator alone is a 13 ps delay (at `ng=4`) — enough to trigger the quasi-static warning below 130 ps between samples. Give the real length. |
+| `kappa1=`, `kappa2=` | π/4 | input and output coupler angles; π/4 is 50:50 |
+| `wgu_l=`, `wgl_l=` | 0 | extra passive length in the upper / lower arm (arm imbalance), in m |
+| `dacoeff0=`, `dacoeff1=`, … | 0 | drive-dependent excess loss, a polynomial in the drive voltage, in 1/m, 1/(m·V), … |
 
 #### `modm` and `modp`: the index-change coefficients
 
@@ -123,7 +132,7 @@ which equivalent circuit SPIPE inserts:
 
 | level | on a modulator (`mod_level*`) | on a detector (`pd_level*`) |
 |---|---|---|
-| `level1` | near open circuit (1 GΩ) — use when you do not want the load to matter | simplest current source into 1 kΩ |
+| `level1` | near open circuit (1 GΩ) — use when you do not want the load to matter | the photocurrent into 2 fF, reaching the output through a 1 kΩ series resistor. It has no path to ground of its own: give the output node a load. |
 | `level2` | — | diode junction behind a 70 dB ideal amplifier |
 | `level3` | realistic depletion-mode RC: series access resistance, junction capacitance, pad capacitance | — |
 | `debug` | bare resistor | bare current source |
@@ -198,6 +207,21 @@ That is the whole switch: declaring a parameter is what makes the run differenti
 
 Device names are matched case-insensitively; parameter names follow SPICE (`W`, `L`, `R`).
 
+### `.print tran` — reading electronic node voltages
+
+```
+.print tran v(vdrv) v(vo1)
+```
+
+Every node named here comes back in the first dict `Circuit.simulate()` returns, keyed
+exactly as written (`probes_e['v(vo1)']`), one value per `.tran` sample. Without the line
+that dict is empty.
+
+The probes are differentiable. On the built-in engine and Xyce their gradient is the total
+derivative through the whole loop — a detector's output voltage depends on `W` through the
+driver, the modulator and the light, and all of that is included. On HSPICE it covers only
+the electronic circuit's direct dependence on the parameter, not the path through the light.
+
 ---
 
 ## A complete two-domain example
@@ -230,5 +254,10 @@ pd2 b2 vo2 level1 r0=1.0
 detectors and read by the electronics. Those three nodes are the electronic–photonic
 interfaces, and nothing else declares them as such.
 
-A photodetector's output node must have a DC path to ground, or the electronic solve has a
-floating node and Newton will not converge — hence `Rload1` and `Rload2`.
+A photodetector's output node must have a DC path to ground — hence `Rload1` and `Rload2`.
+Without one the photocurrent charges the detector's capacitance without limit. The built-in
+engine refuses such a circuit and names the node.
+
+With `1.0@a1` (1 W of light) and `r0=1`, this example makes up to 0.5 A of photocurrent and
+500 V across the 1 kΩ loads. The numbers are unrealistic but harmless here, because the
+example is about the gradient. For realistic levels use a milliwatt laser (`0.0316@a1`).

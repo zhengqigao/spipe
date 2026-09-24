@@ -502,6 +502,83 @@ def build():
             tb.close(f'X15.uic_source_value_{_label.split()[0]}', _v[-1], _want, 1e-9,
                      detail=f'the source sets the node, not the 0 V capacitor pin ({_label})')
 
+    # ---------------- X16 : a misspelled MOSFET parameter is not silently ignored -----
+    # "WW=20u" used to fall back to the 100 um default width with no message, and an
+    # unimplemented model parameter (RD=1k) was dropped silently.
+    import warnings as _w16
+    def _mos(card, model="LEVEL=1 VTO=0.7 KP=120u"):
+        return _N15.from_string(f"* t\n.model nch NMOS ({model})\nVdd vdd 0 3.0\nVg g 0 1.2\n"
+                                f"R1 vdd d 20k\n{card}\n.end\n")
+    tb.raises('X16.mos_instance_typo_W', lambda: _mos("M1 d g 0 0 nch WW=20u L=1u"),
+              Exception, 'WW=20u must be an error, not the 100 um default width')
+    tb.raises('X16.mos_instance_typo_L', lambda: _mos("M1 d g 0 0 nch W=20u LL=1u"),
+              Exception, 'LL=1u must be an error, not the 100 um default length')
+    for _cid, _card, _model in (
+            ('X16.mos_unused_instance_warns', "M1 d g 0 0 nch W=20u L=1u PD=10u", None),
+            ('X16.mos_unused_model_param_warns', "M1 d g 0 0 nch W=20u L=1u",
+             "LEVEL=1 VTO=0.7 KP=120u RD=1k")):
+        with _w16.catch_warnings(record=True) as _caught:
+            _w16.simplefilter("always")
+            _ok16, _ = tb.no_raise(_cid + '_builds',
+                                   lambda c=_card, m=_model: _mos(c) if m is None else _mos(c, m))
+        tb.ok(_cid, any("does not implement" in str(x.message) for x in _caught),
+              'an accepted-but-unused parameter is dropped with a warning, not silently')
+    _ok16, _n16 = tb.no_raise('X16.mos_clean_card_builds',
+                              lambda: _mos("M1 d g 0 0 nch W=20u L=1u"))
+    if _ok16:
+        tb.close('X16.mos_clean_card_width', float(_n16.param('M1', 'W')), 20e-6, 1e-12,
+                 detail='a correctly spelled W is used as given')
+
+    # ---------------- X17 : scratch files and relative .include ------------------------
+    # Circuit used to write its deck to ./tmp in the caller's working directory, shared by every
+    # run started there, and the built-in engine resolved a relative .include against that
+    # ./tmp. Now each Circuit gets a private scratch directory and relative includes resolve
+    # against the netlist's own directory.
+    import tempfile as _tf17, shutil as _sh17, gc as _gc17
+    _src17 = open(_repo_file('examples', 'link_driver_mzm.sp')).read()
+    _models = ''.join(l for l in _src17.splitlines(True) if l.lower().startswith('.model'))
+    _deck17 = ''.join(l if not l.lower().startswith('.model') else ''
+                      for l in _src17.splitlines(True)).replace('.tran', '.include lib/models.lib\n.tran', 1)
+    _d17 = _tf17.mkdtemp(prefix='tb10_x17_')
+    _cwd17 = os.getcwd()
+    try:
+        os.makedirs(os.path.join(_d17, 'deck', 'lib'))
+        os.makedirs(os.path.join(_d17, 'elsewhere'))
+        open(os.path.join(_d17, 'deck', 'lib', 'models.lib'), 'w').write(_models)
+        open(os.path.join(_d17, 'deck', 'link.sp'), 'w').write(_deck17)
+        os.chdir(os.path.join(_d17, 'elsewhere'))
+        _ok17, _c17 = tb.no_raise('X17.relative_include_resolves',
+                                  lambda: sp.Circuit(os.path.join('..', 'deck', 'link.sp'), 'native'),
+                                  'models only in a relative .include are found from another cwd')
+        _ok17b, _c17b = tb.no_raise('X17.second_circuit_builds',
+                                    lambda: sp.Circuit(os.path.join('..', 'deck', 'link.sp'), 'native'))
+        if _ok17 and _ok17b:
+            _w1, _w2 = _c17.e_circuit.spice_wrk_dir, _c17b.e_circuit.spice_wrk_dir
+            tb.ok('X17.private_scratch_dirs', _w1 != _w2, f'{_w1} vs {_w2}: two runs must not share a deck')
+            tb.ok('X17.nothing_written_to_cwd', os.listdir('.') == [], f'cwd contains {os.listdir(".")}')
+            del _c17, _c17b; _gc17.collect()
+            tb.ok('X17.scratch_removed', not os.path.exists(_w1) and not os.path.exists(_w2),
+                  'the private scratch directory is removed with the Circuit')
+    finally:
+        os.chdir(_cwd17)
+        _sh17.rmtree(_d17, ignore_errors=True)
+
+    # ---------------- X18 : a detector output with no DC path to ground --------------
+    # Without a load resistor the photocurrent charges the detector's 2 fF forever; one deck
+    # failed Newton, another ran and returned 170 kV at the detector with no message.
+    _d18 = _tf17.mkdtemp(prefix='tb10_x18_')
+    try:
+        _no_load = ''.join(l for l in _src17.splitlines(True) if not l.lower().startswith('rload'))
+        open(os.path.join(_d18, 'no_load.sp'), 'w').write(_no_load)
+        open(os.path.join(_d18, 'load.sp'), 'w').write(_src17)
+        tb.raises('X18.floating_detector_refused',
+                  lambda: sp.Circuit(os.path.join(_d18, 'no_load.sp'), 'native'), ValueError,
+                  'a detector output with no DC path to ground is refused, naming the node')
+        tb.no_raise('X18.loaded_detector_builds',
+                    lambda: sp.Circuit(os.path.join(_d18, 'load.sp'), 'native'))
+    finally:
+        _sh17.rmtree(_d18, ignore_errors=True)
+
     return tb
 
 

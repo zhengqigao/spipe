@@ -1,6 +1,7 @@
 from typing import List, Tuple, Optional, Dict, Any, Callable, Mapping
 from spipe.electronic.electronic import Electronic
 from spipe.photonic.photonic import Photonic
+import os
 import re
 import torch
 from spipe import config
@@ -724,12 +725,41 @@ class _ImplicitFixedPoint(torch.autograd.Function):
         return ctx.solver(grad_output), None
 
 
+def _probe_vjp(probe: torch.Tensor, v_leaf: torch.Tensor, electronic, captured) -> Callable:
+    """``g -> (d probe / d v_leaf)^T g``, evaluated with the step-2 back-end state restored."""
+    def vjp(g: torch.Tensor) -> torch.Tensor:
+        with electronic.restored_state(captured):
+            grad, = torch.autograd.grad(probe, v_leaf, grad_outputs=g.to(probe.dtype),
+                                        retain_graph=True, allow_unused=True)
+        return torch.zeros_like(v_leaf) if grad is None else grad
+    return vjp
+
+
+class _ProbeTotalDerivative(torch.autograd.Function):
+    """Identity on an electrical probe whose backward adds the path through the light.
+
+    ``probe`` depends on the device parameters directly and on a detached stand-in ``v_leaf``
+    for the converged drive. Backward passes the cotangent straight on to ``probe`` (the direct
+    part) and sends ``(d probe / d v_leaf)^T g`` to ``v_fixed`` -- the drive carrying the
+    implicit-function-theorem derivative -- which supplies the part through the photocurrent.
+    """
+
+    @staticmethod
+    def forward(ctx, probe: torch.Tensor, v_fixed: torch.Tensor, vjp: Callable):
+        ctx.vjp = vjp
+        return probe.detach().clone()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, ctx.vjp(grad_output), None
+
+
 class Circuit(object):
     def __init__(self,
                  file_path: str,
                  spice_exe: str,
                  power_node: Optional[List] = None,
-                 spice_wrk_dir: Optional[str] = './tmp',
+                 spice_wrk_dir: Optional[str] = None,
                  spice_file_name: Optional[str] = 'tmp.sp',
                  keep_spice: Optional[bool] = True,
                  need_grads: Optional[bool] = False,
@@ -748,7 +778,8 @@ class Circuit(object):
                                     use_adjoint=use_adjoint,
                                     spice_wrk_dir=spice_wrk_dir,
                                     spice_file_name=spice_file_name,
-                                    keep_spice=keep_spice)
+                                    keep_spice=keep_spice,
+                                    include_dir=os.path.dirname(os.path.abspath(file_path)))
         self.p_circuit = Photonic(self.p_content, need_grads = need_grads)
 
         #: What :meth:`differentiable_simulate` measured about the electronic/photonic
@@ -1080,6 +1111,21 @@ class Circuit(object):
                 #    whole method exists for -- carries the total derivative
                 #    d(optical)/dtheta = f'(V*) (I - A)^{-1} dg/dtheta and not a partial one.
                 param_e, result_middle_p, power_p = photonic.simulate(t, v_fixed, mode=mode)
+
+                # 5. the electrical probes need the same total derivative. They come from step 2,
+                #    whose photocurrent was computed from a *detached* stand-in for the drive
+                #    (v_leaf), so on their own they carry only the direct dependence on the device
+                #    parameters: v(vdrv) was right, but v(vo1) -- a detector output, which depends
+                #    on W only through the light -- came back with gradient exactly 0 against a
+                #    finite difference of 2.3e4. Each probe is wrapped so that its sensitivity to
+                #    v_leaf is routed into v_fixed, which carries the implicit-function-theorem
+                #    derivative. (A second differentiable transient on the same netlist is not an
+                #    option: the engine's two graphs would share freed intermediates.)
+                if measurable and result_middle_e:
+                    result_middle_e = {
+                        name: _ProbeTotalDerivative.apply(
+                            probe, v_fixed, _probe_vjp(probe, v_leaf, electronic, captured))
+                        for name, probe in result_middle_e.items()}
         finally:
             photonic.need_grads = previous_need_grads
 

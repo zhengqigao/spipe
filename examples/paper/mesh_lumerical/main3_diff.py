@@ -155,6 +155,10 @@ def run_spipe(num_row, num_col, source_in, prob_node):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_exp', type=int, default=1)
+    parser.add_argument('--max_size', type=int, default=30,
+                        help='largest mesh (N x N) in the 3, 6, 9, ... sweep; the default 30 takes '
+                             'hours, because every one of the 1,860 phase shifters of a 30x30 '
+                             'mesh costs four finite-difference solves. Try --max_size 9.')
     parser.add_argument('--plot', type=bool, default=True)
     parser.add_argument('--save_plot', action='store_true', default = False)
     parser.add_argument('--gpu', type = int, default = -1)
@@ -162,8 +166,8 @@ if __name__ == '__main__':
 
     config['device'] = torch.device(f"cuda:{args.gpu}") if args.gpu >=0 else torch.device("cpu")
 
-    num_row_list = list(range(3,33,3)) # [2,4,8,16,20]  # [2,4,8]
-    num_col_list = list(range(3,33,3)) # [2,4,8]
+    num_row_list = list(range(3, args.max_size + 1, 3))
+    num_col_list = list(range(3, args.max_size + 1, 3))
 
     run_time = np.empty((len(num_row_list), args.num_exp, 2))
     err = np.empty((len(num_row_list), args.num_exp))
@@ -171,6 +175,7 @@ if __name__ == '__main__':
     for j in range(len(num_row_list)):
         num_row, num_col = num_row_list[j], num_col_list[j]
         total = (num_row + 1) * num_col + (num_col + 1) * num_row
+        print(f"--- {num_row}x{num_col} mesh, {total} devices", flush=True)
 
         in_key, in_i, in_j, in_p = 'hori', 1, 1, 1
         out_key, out_i, out_j, out_p = 'hori', 1, 1, 3
@@ -180,8 +185,8 @@ if __name__ == '__main__':
             run_time, diff, vout = run_spipe(num_row, num_col, source_in=f'n_{in_key}_{in_i}_{in_j}_p{in_p}',
                                               prob_node=f'n_{out_key}_{out_i}_{out_j}_p{out_p}')
 
-            print("diff mean",diff.mean())
-            print("vout",vout)
+            print("diff mean",diff.mean(), flush=True)
+            print("vout",vout, flush=True)
             avg_diff += diff.mean()
 
         print(f"final avg diff: {avg_diff/args.num_exp}")

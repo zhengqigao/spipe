@@ -328,6 +328,42 @@ def build():
         tb.ok('E2.circuit_grad_vs_finite_difference', False, f"{e!r}")
 
     # ------------------------------------------------------------------
+    # Electrical probes (.print tran) must carry the TOTAL derivative. A detector output
+    # depends on W only through the light; its gradient used to come back exactly 0 against
+    # a finite difference of 2.3e4 -- silently.
+    # ------------------------------------------------------------------
+    try:
+        import tempfile
+        from spipe.core.core import Circuit
+        src = open(os.path.join(REPO, 'examples', 'link_driver_mzm.sp')).read()
+        src = src.replace('.sensparam MN1:W MN1:L', '.sensparam MN1:W MN1:L\n.print tran v(vo1) v(vdrv)')
+        probe_deck = os.path.join(tempfile.mkdtemp(prefix='spipe_tb12_'), 'probe.sp')
+        open(probe_deck, 'w').write(src)
+        wrk = os.path.dirname(probe_deck)
+
+        def _probe_loss(width, grad):
+            c = Circuit(probe_deck, spice_exe='native', spice_wrk_dir=wrk)
+            w = c.param('mn1', 'W')
+            if width is not None:
+                with torch.no_grad():
+                    w.copy_(torch.tensor(width, dtype=torch.float64))
+            if grad:
+                return c.simulate()[0]['v(vo1)'].sum(), w
+            with torch.no_grad():
+                return float(c.simulate()[0]['v(vo1)'].sum()), w
+
+        loss, w = _probe_loss(None, True)
+        loss.backward()
+        w0 = float(w.detach()); h = w0 * 1e-4
+        fd = (_probe_loss(w0 + h, False)[0] - _probe_loss(w0 - h, False)[0]) / (2 * h)
+        tb.ok('E2.probe_grad_nonzero', abs(float(w.grad)) > 1e-3 * abs(fd),
+              f"d sum v(vo1)/dW = {float(w.grad):.6g}; it used to be exactly 0")
+        tb.lt('E2.probe_grad_vs_finite_difference', abs(float(w.grad) - fd) / abs(fd), 1e-5,
+              f"detector-output probe: analytic {float(w.grad):.6f} vs central FD {fd:.6f}")
+    except Exception as e:
+        tb.ok('E2.probe_grad_vs_finite_difference', False, f"{e!r}")
+
+    # ------------------------------------------------------------------
     # Like for like: the unified call must BE the composition. Same netlist, same
     # grid, same loss, once through Circuit.simulate() and once by driving the
     # native engine on the deck Circuit generated, then Photonic on its drive.
