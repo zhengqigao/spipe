@@ -1,4 +1,4 @@
-"""Draw docs/figures/modulator_response.png: the MZM phase change after a step in the drive,
+"""Draw docs/figures/modulator_phase_change.png: the MZM phase change after a step in the drive,
 for several response times tau.
 
 Every curve is computed by SPIPE's own modulator model (MZM._drive, the code path a simulation
@@ -6,7 +6,7 @@ uses) and checked against the analytic step response 1 - exp(-t/tau) before it i
 time grid the drive value at a sample is taken to hold over the interval before it, so the
 discrete response leads the continuous one by exactly one sample; the check allows for that.
 
-Run:  python docs/figures/make_modulator_response.py
+Run:  python docs/figures/make_modulator_phase_change.py
 """
 import math
 import os
@@ -68,6 +68,6 @@ ax.legend(frameon=False, fontsize=9, loc='lower right')
 ax.set_title('MZM phase change after a step in the drive:  τ·dΔφ/dt + Δφ = π·(V − vbias)/vpi',
              fontsize=10.5)
 fig.tight_layout()
-out = os.path.join(HERE, 'modulator_response.png')
+out = os.path.join(HERE, 'modulator_phase_change.png')
 fig.savefig(out, dpi=150)
 print(f"wrote {out}; every curve matches the analytic step response")
