@@ -55,9 +55,41 @@ f_3dB = 1 / (2π τ)        i.e.   τ = 1 / (2π f_3dB)
 | 40 GHz | `3.98p` |
 | free-carrier limit, ~0.1 ps | effectively `0`: keep the default |
 
-When the modulator's bandwidth is set mainly by its RC (the driver charging the junction),
-model that on the electrical side instead, with the `level3` load. `tau=` is for the optical
-response of the device itself.
+### Why a modulator responds slowly, and how SPIPE models each cause
+
+A modulator's optical output can trail its drive signal for two separate reasons.
+
+1. **The voltage reaches the device slowly (electrical).** Electrically, a modulator is a
+   capacitor: its pn junction (a few hundred fF) plus its contact pad. The driver has to
+   charge that capacitance through resistance: its own output resistance plus the modulator's
+   series resistance. So when the driver switches, the voltage across the junction does not
+   jump; it rises gradually, with a time constant of about `R·C`. For example, 110 Ω and
+   220 fF give 24 ps, a bandwidth near 6.6 GHz. A stronger driver (a wider transistor) has
+   less resistance and charges the junction faster.
+2. **The device reacts slowly even to an instant voltage change (physical).** When the
+   junction voltage changes, the charge carriers inside have to move before the refractive
+   index, and so the optical phase, can follow. In a depletion-mode silicon modulator this
+   takes well under a picosecond. In a carrier-injection modulator it takes about a
+   nanosecond, the lifetime of the carriers.
+
+**The `tau` parameter above handles the second cause.** It sets how quickly the optical phase
+follows the voltage that actually arrives at the device.
+
+**The first cause is handled in the electronic circuit.** An active device's netlist line
+ends with an electrical load level, for example `mzm0 a1 a2 b1 b2 vdrv level3 ...`. The
+level chooses the equivalent circuit that SPIPE connects to the drive node in the electronic
+simulation. `level3` is a realistic modulator load: a 10 Ω series resistance, a 200 fF
+junction and a 20 fF pad (see "Electrical load levels" in [netlist.md](netlist.md)). The
+electronic simulator then really has to charge that capacitance. The voltage it passes to the
+modulator is already slowed by the RC, and how much depends on the driver circuit you
+designed. This is also what makes the gradient with respect to a transistor width
+meaningful: a wider driver charges the modulator faster, and the optical output shows it.
+
+**Do not model the same slowness twice.** A datasheet usually quotes a single bandwidth. If
+that bandwidth comes from RC charging, which is typical of depletion-mode silicon modulators,
+use the `level3` load and keep `tau` at 0, or at a small value for whatever the device itself
+adds. Setting `tau` to the whole datasheet bandwidth as well would slow the modulator twice.
+Use `tau` alone when the device's own physics limits it, as in a carrier-injection modulator.
 
 ## Assumption 2: the photonic network settles instantly
 
