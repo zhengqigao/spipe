@@ -30,6 +30,92 @@ free-carrier plasma dispersion (~0.1 ps) against a 10 Gsps DAC (100 ps).
 **Lifted by:** the `mzm` model's `tau=` parameter, which gives the phase a first-order
 (or `order=n` cascaded) lag. `tau=0` reproduces the instantaneous result bit-for-bit.
 
+### The equations
+
+**Instantaneous (the default, `tau=0`).** The drive sets the phase difference between the two
+arms directly:
+
+```
+Δφ(t) = π · (V(t) − vbias) / vpi
+```
+
+**With a response time (`tau > 0`).** The phase follows the drive through a single-pole lag:
+
+```
+τ · dΔφ/dt + Δφ = π · (V(t) − vbias) / vpi
+```
+
+After a step in the drive, `Δφ` covers 63 % of the way in one `τ`, 95 % in `3τ` and over 99 %
+in `5τ`. `order=n` passes the drive through `n` such lags in a row, each with the same `τ`;
+the response then rolls off more steeply above the bandwidth. The lag is applied to
+`V − vbias` before anything else. The loss modulation (`dacoeff*`) follows the lagged drive
+too, as carrier density does in a real device.
+
+**On the time grid.** SPIPE applies the lag exactly on the `.tran` samples. The drive value
+at sample `k` is taken to hold over the whole interval before it:
+
+```
+x[k] = V(t_k) − vbias,    a_k = exp(−(t_k − t_{k−1}) / τ)
+y[k] = a_k · y[k−1] + (1 − a_k) · x[k],    y[0] = x[0]
+Δφ[k] = π · y[k] / vpi
+```
+
+So the run starts settled at its first drive value. Use samples several times finer than `τ`
+to see the shape of an edge, not just its effect on the samples.
+
+### Choosing `τ` and `order`
+
+`τ` sets the modulator's electro-optic bandwidth. For a single lag,
+
+```
+f_3dB = 1 / (2π τ)        i.e.   τ = 1 / (2π f_3dB)
+```
+
+| modulator bandwidth | `tau=` (with `order=1`) |
+|---|---|
+| 10 GHz | `15.9p` |
+| 20 GHz | `7.96p` |
+| 40 GHz | `3.98p` |
+| free-carrier limit, ~0.1 ps | effectively `0`: keep the default |
+
+With `order=n`, the same `τ` gives a lower bandwidth,
+`f_3dB = √(2^(1/n) − 1) / (2π τ)`. For example, `tau=8p` gives 19.9 GHz with `order=1` and
+12.8 GHz with `order=2`. Pick `n` to match the steepness of a measured frequency response,
+then `τ` to match its 3 dB point. When the modulator's bandwidth is set mainly by its RC
+(the driver charging the junction), model that on the electrical side instead, with the
+`level3` load. `tau=` is for the optical response of the device itself.
+
+### Reduced cases
+
+**The default `mzm`** has `tau=0`, `chirp=0`, 50:50 couplers, `il=0`, `er` infinite and no
+loss modulation. For light entering the first input, it reduces to
+
+```
+first output  (bar):    sin²(Δφ / 2)
+second output (cross):  cos²(Δφ / 2),        Δφ = π · (V − vbias) / vpi
+```
+
+At `V = vbias` all the light leaves by the second output; at `V = vbias + vpi`, by the first.
+`vpi` is exactly the swing from full-on to full-off.
+
+**The paper's case.** The paper's decks use `modm`, its Eq. 5: a variable-ratio coupler whose
+angle is set by the drive. It responds instantly: `modm` has no `tau=`, and Assumption 1 holds
+exactly. Its phase is a polynomial in the drive:
+
+```
+φ(V) = β · act_l · (coeff0 + coeff1·V + coeff2·V² + …),     β = 2π · neff · f / c
+first output  (through):  cos²(φ)
+second output (cross):    sin²(φ)
+```
+
+With the paper's values, `coeff1 = 1e-3`, `act_l = 200 µm`, `neff = 2.35` and `f = 193.5 THz`:
+`φ = 1.906 rad/V · V`. The light moves fully to the cross port at `V = 0.824 V`, and at 0.3 V
+71 % stays in the through port. The paper's time steps (nanoseconds, a 0.1 Gsps DAC) are far
+longer than any free-carrier response (~0.1 ps), which is why the instantaneous model is
+accurate there. To give that switch a finite speed, model it with `mzm` and `tau=` instead.
+Note that `modm` and `mzm` differ in `V_π` by 2× and in bias point by π/2 (see
+[netlist.md](netlist.md)).
+
 ## Assumption 2: the photonic network settles instantly
 
 **Not stated in the paper, and it is the one that actually binds.**
