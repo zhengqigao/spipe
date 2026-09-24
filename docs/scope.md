@@ -116,40 +116,95 @@ total bandwidth is right only for the driver it was measured with.
 
 ## Assumption 2: the photonic network settles instantly
 
-**Not stated in the paper, and it is the one that actually binds.**
+The paper does not state this assumption, but it is the one that limits SPIPE most.
 
-Because the network is solved in *steady state* at every time sample, SPIPE implicitly
-assumes every optical transit and round-trip time is negligible against the modulation
-timescale. Concretely, a 250 µm waveguide at `ng = 4` is 3.3 ps one way; a 3×3 mesh round
-trip is tens of ps. At 0.1 Gsps (10 ns/sample) there is ~1000× margin. At 10 Gb/s it is
-10–50 % of a bit. A high-Q ring has a photon lifetime of nanoseconds.
+### What the assumption says
 
-The failure mode is **structural, not gradual**. With zero optical memory there is no
-delay, so resonator ring-up, delay-set oscillation and pattern-dependent ISI are not
-approximated badly — they are absent from the model.
+At every time sample, SPIPE solves the photonic network in **steady state**: it takes the
+modulator settings at that instant and finds the fields that would exist if they had been held
+forever. So light is assumed to cross the whole network, and every resonator to fill up, in no
+time at all. The next sample is solved afresh, with no memory of the last one.
 
-**Guarded by:** `Photonic.check_quasistatic(dt)`, which warns, with both numbers, when the
-network's delay exceeds `0.1·dt`. It uses the larger of two estimates: the longest light path
-(delay lines, meshes), and the group delay `dφ/dω` measured at the simulated carriers. The
-second one is what sees a resonator, whose photon lifetime is its round trip times its
-finesse — on a high-Q ring, 2.2 ns where the path length alone suggests 1.7 ps. Disable with
-`config['quasistatic_check'] = False`.
+Light does take time. A 250 µm waveguide at `ng = 4` takes 3.3 ps to cross, and a round trip
+through a 3×3 mesh takes tens of ps. A resonator holds light for many round trips: a high-Q
+ring's photon lifetime is nanoseconds, even though one trip around it is about a picosecond.
+Whether that matters depends on the time step:
 
-**Resolved by:** `simulate(..., mode='envelope')`. The passive sub-network is linear and
-time-invariant, so its transfer `H(ω)` over the `.freq` band is computed once and inverse-
-FFT'd into an impulse response; the detected field is then a convolution, so light arriving
-at time `t` carries the modulator state from `t − τ`. This upgrades the assumption from
-*"optical memory is zero"* to *"optical memory is short compared with how fast the
-modulator changes"*.
+- at 0.1 Gsps (10 ns per sample), 3.3 ps is about 1/3000 of a sample, and the assumption holds;
+- at 10 Gb/s (100 ps per bit), tens of ps of delay is 10–50 % of a bit, and it does not.
 
-Envelope mode requires a `.freq` grid wide enough (`band ≫ 1/dt`) and fine enough
-(`1/(2·df) ≫ τ_max`); it warns with concrete numbers when either is violated.
-It is differentiable with respect to the **modulator drive**: `backward()` through an
-envelope-mode result fills in `drive.grad`, matching finite differences to `4e-09`. It also works
-inside a `Circuit` (`simulate(mode='envelope')`), including gradients with respect to
-`.sensparam` parameters. It is not yet differentiable with respect to *passive* device
-parameters (a waveguide length, a coupler angle); use `mode='quasistatic'` for those. How to
-size the grid, which carrier to read, and the settings are in [envelope.md](envelope.md).
+### What goes wrong when it does not hold
+
+The error is not a small inaccuracy. Effects that depend on delay are simply **missing** from
+the result. The figure shows two circuits in which a modulator switches the light on at 210 ps.
+
+![Detected power after the light is switched on: steady state versus envelope mode](figures/optical_memory.png)
+
+- **(a) A 100 ps delay line.** The light reaches the detector 100 ps after it is switched on.
+  The steady-state solve (red) shows it arriving at once.
+- **(b) A ring resonator** next to the waveguide, with a 10 ps round trip and a 163 ps photon
+  lifetime. In reality the light that passes the ring arrives first, at almost full power. Then
+  the ring fills and its light cancels part of the passing light, and the output settles over
+  several photon lifetimes. The steady-state solve jumps straight to the final value, so the
+  whole transient is missing.
+
+For the same reason, a steady-state solve cannot show intersymbol interference from optical
+memory, or oscillation in a loop whose delay sets its period.
+
+### What SPIPE now does about it
+
+**1. It warns you.** On the first `simulate()`, SPIPE estimates the network's optical delay and
+warns, giving both numbers, when that delay is more than `0.1·dt`. It takes the larger of two
+estimates:
+- the longest light path, which catches delay lines and meshes;
+- the group delay `dφ/dω` measured at the simulated carriers, which catches resonators. A
+  path length cannot see a photon lifetime: on a high-Q ring the path gives 1.7 ps, but the
+  lifetime is 2.2 ns.
+
+Call `Photonic.check_quasistatic(dt)` to run the check yourself. If your time axis is not
+physical (a DC sweep, say), turn it off with `config['quasistatic_check'] = False`.
+
+**2. It can model the delay: `simulate(..., mode='envelope')`.** The idea has three steps:
+- The passive part of the circuit (waveguides, couplers, rings, meshes) is linear and does not
+  change in time. So its response can be computed once, at every frequency of the `.freq`
+  grid.
+- The inverse Fourier transform turns that frequency response into an **impulse response**:
+  how much light reaches the output a given time after it entered.
+- The light from the modulators is **convolved** with that impulse response. Light reaching a
+  detector at time `t` therefore carries the modulator state from earlier times, which is the
+  memory the steady-state solve leaves out.
+
+In the figure the envelope result (blue dots) matches the exact answer at every sample. Once the
+drive stops changing, it settles to exactly the steady-state value. The assumption becomes
+*"optical memory is short compared with how fast the modulators change"* rather than *"there is
+no optical memory"*. Modulators are still treated as instantaneous, apart from their own `tau`
+(Assumption 1).
+
+**3. The `.freq` grid is checked.** Envelope mode builds the impulse response from the `.freq`
+grid, so the grid has to meet two conditions, where `dt` is the time step:
+- **wide enough:** the band must be several times `1/dt`;
+- **fine enough:** `1/(2·df)` must be well above the circuit's memory, which is several photon
+  lifetimes for a resonator.
+
+SPIPE warns, with the numbers, when either fails. [envelope.md](envelope.md) explains how to size
+the grid and which carrier to read.
+
+**4. It works in co-simulation, with gradients.** `Circuit(...).simulate(mode='envelope')` keeps
+the optical delay inside the electronic–photonic loop. `backward()` gives gradients:
+- with respect to the **modulator drive**, which match finite differences to 4e-9;
+- with respect to **`.sensparam` parameters**, with the optical delay included in the
+  derivative.
+
+It is not yet differentiable with respect to *passive* photonic parameters, such as a waveguide
+length or a coupler angle. Use the default mode for those.
+
+| | the original solver | SPIPE now |
+|---|---|---|
+| optical delay | not modelled, with no warning | warns when the delay is more than 0.1·dt, including a resonator's photon lifetime |
+| delay line, ring transient | absent: the output jumps to its final value | `mode='envelope'` reproduces them, and matches the exact answer in the figure |
+| electronic–photonic loop | no delay in the loop | envelope mode inside `Circuit`, with the delay in the loop |
+| gradients | steady state only | also through envelope mode: modulator drive and `.sensparam` (not passive parameters) |
+| checks on the result | none | `.freq` grid sizing, runaway, and failure to settle (below) |
 
 ### A known limitation: modulators inside optical loops
 
