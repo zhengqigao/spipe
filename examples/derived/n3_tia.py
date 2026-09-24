@@ -189,6 +189,7 @@ def characterise(circuit_dir: str, spice_exe: str, pd_model: str,
 
     return {
         'name': name,
+        'dt': float(time[1] - time[0]),
         'iters': info['iters'],
         'i_dark': float(photocurrent[before]),
         'i_lit': float(photocurrent[after]),
@@ -237,13 +238,15 @@ def main() -> int:
               f"{result['i_lit'] * 1e6:10.4f} uA")
         print(f"      output node   {result['v_dark']:10.6f} -> {result['v_lit']:10.6f} V")
         print(f"      transimpedance dV/dI = {result['transimpedance'] / 1e3:10.4f} kOhm")
-        print(f"      10-90% rise   {result['rise_10_90'] * 1e12:10.3f} ps")
+        # read off the sample grid, so it is only known to one sample spacing
+        print(f"      10-90% rise   {result['rise_10_90'] * 1e12:10.0f} ps  "
+              f"(+/- {result['dt'] * 1e12:.0f} ps: read off the sample grid)")
 
     print('\n  -- comparison ----------------------------------------------------------------')
     print(f"      {'front end':38s} {'Rt [kOhm]':>12s} {'rise [ps]':>12s} {'iters':>7s}")
     for row in rows:
         print(f"      {row['name']:38s} {row['transimpedance'] / 1e3:12.4f} "
-              f"{row['rise_10_90'] * 1e12:12.3f} {row['iters']:7d}")
+              f"{row['rise_10_90'] * 1e12:12.0f} {row['iters']:7d}")
     if len(rows) == 2 and rows[0]['transimpedance']:
         ratio = rows[1]['transimpedance'] / rows[0]['transimpedance']
         print(f"      real / ideal transimpedance ratio = {ratio:.4f}")

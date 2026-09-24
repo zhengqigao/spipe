@@ -49,7 +49,10 @@ if os.environ.get('SPIPE_INTERCONNECT_DIR'):
     file_path = os.environ['SPIPE_INTERCONNECT_DIR']
 else:
     import shutil, tempfile
-    file_path = os.path.join(tempfile.mkdtemp(prefix='spipe_interconnect_'), 'interconnect')
+    import atexit
+    _scratch = tempfile.mkdtemp(prefix='spipe_interconnect_')
+    atexit.register(shutil.rmtree, _scratch, True)         # removed when the script exits
+    file_path = os.path.join(_scratch, 'interconnect')
     shutil.copytree(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interconnect'),
                     file_path)
 
@@ -309,7 +312,8 @@ write(file_prefix + "out_imag.txt", num2str(image_t), "overwrite");
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_exp', type=int, default=10)
-    parser.add_argument('--plot', type=bool, default=True)
+    parser.add_argument('--plot', action=argparse.BooleanOptionalAction, default=True,
+                        help='draw the plots (--no-plot to skip them)')
     parser.add_argument('--save_plot', action='store_true', default = False)
     parser.add_argument('--gpu', type = int, default = -1)
     args = parser.parse_args()

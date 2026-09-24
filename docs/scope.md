@@ -121,11 +121,12 @@ once, and silently fell back to an unfiltered incoherent sum.
 ## A worked demonstration of the boundary
 
 `examples/oeo_optical_delay.py` builds an optoelectronic oscillator whose frequency is set
-by a 2 m optical delay line. SPIPE **refuses to simulate it**, prints the group delay
-(15.68 ns), the time step (25 ps) and their ratio (627), explains that the frequency-
-selective element is structurally absent from the quasi-static model, and points at
-`mode='envelope'`. It reports no oscillation frequency, because any number it produced
-would be meaningless.
+by a 2 m optical delay line. SPIPE warns: it prints the group delay (15.68 ns), the time step
+(25 ps) and their ratio (627). The example then stops rather than simulate, explaining that the
+frequency-selective element is structurally absent from the quasi-static model, and points at
+`mode='envelope'`. It reports no oscillation frequency, because any number the default mode
+produced would be meaningless. The library does not stop you: a warning is all it gives, and
+`Circuit.simulate()` on that netlist runs and returns such a number.
 
 That is the intended behaviour: a simulator should decline rather than return a plausible
 wrong answer.

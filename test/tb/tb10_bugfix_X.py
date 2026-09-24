@@ -679,6 +679,12 @@ def build():
     tb.raises('X20.source_amplitude_named', lambda: _build20("mzi0 a1 a2 b1 b2 theta=0.3",
                                                              ".source 31.6m@a1"), ValueError)
 
+    # ---------------- X21 : non-positive MOSFET W or L -------------------------------------
+    # HSPICE and Xyce stop on these; the square law returned 1.25e-25 V for L=0 and a 9 V node
+    # on a 3 V supply for W<0.
+    tb.raises('X21.mos_zero_length_refused', lambda: _mos("M1 d g 0 0 nch W=20u L=0"), Exception)
+    tb.raises('X21.mos_negative_width_refused', lambda: _mos("M1 d g 0 0 nch W=-20u L=1u"), Exception)
+
     return tb
 
 

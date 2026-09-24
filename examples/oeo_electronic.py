@@ -231,8 +231,10 @@ def main() -> int:
           f"(filter centre {F0 / 1e9:.6f} GHz)")
     print(f"      error vs analytic      : {(f_fft - F_ANALYTIC) / F_ANALYTIC * 100:+.4f} % "
           f"(FFT), {(f_zero - F_ANALYTIC) / F_ANALYTIC * 100:+.4f} % (zero crossings)")
-    print(f"      FFT bin spacing        : "
-          f"{1.0 / (float(t[-1]) * (1 - 0.45)) / 1e9:.6f} GHz -- the resolution floor")
+    bin_width = 1.0 / (float(t[-1]) * (1 - 0.45))
+    print(f"      FFT bin spacing        : {bin_width / 1e9:.6f} GHz -- the resolution floor, "
+          f"{bin_width / F_ANALYTIC * 100:.0f} % of the frequency:\n"
+          f"                               agreement closer than that is all this record can show")
     print(f"      drive swing            : {float(drive.min()):.6f} .. "
           f"{float(drive.max()):.6f} V")
     print(f"      band-pass output       : peak-to-peak {peak_to_peak:.6f} V, "

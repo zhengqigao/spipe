@@ -20,8 +20,10 @@ a factorisation you already own, not a new simulation. Measured against central 
 differences: **2.0e-10**.
 
 **2. The electronics.** The built-in engine provides both PyTorch autograd and an explicit
-time-domain adjoint. They agree to **exactly 0.00e+00**. The adjoint is a *single* backward
-sweep over the transient regardless of how many parameters you declared, so five parameters
+time-domain adjoint. The autograd path is built on that adjoint, so the two agree to
+**exactly 0.00e+00**. That is a consistency property of the implementation, not an independent
+check; the independent check is against finite differences (7.7e-11). The adjoint is a
+*single* backward sweep over the transient regardless of how many parameters you declared, so five parameters
 cost **1.03×** the time of one — not 5×.
 
 **3. The coupling.** When photocurrent feeds back into a modulator drive, the two domains
@@ -116,6 +118,22 @@ and `4.6e-08` is as closely as a finite difference through an adaptive-step tran
 check it.
 
 `test/tb/tb12_end_to_end_grad.py` repeats this comparison on every run.
+
+What the comparison proves is that the gradient is exact **for the discretisation that ran**. How
+close that discretisation is to the continuous circuit is a separate question. It is the
+question of [backends.md](backends.md)'s time-step section, and this example is a demanding
+case for it:
+- Its 40 samples land on the rails, not on the edges, so `L` depends on `W` only through
+  sub-millivolt tails a few samples after each edge.
+- The default of at most 8 internal steps per sample resolves those tails to about 14%: at
+  `native_nsub = 64` the gradient is `25.60`, and at 128 it is `25.59`.
+- HSPICE and Xyce disagree with each other on the same sub-millivolt effect, because it sits
+  below their default accuracy.
+
+Sample the same circuit every 0.1 ns (`.tran 0 4e-8 401`) and the loss depends on the edges
+themselves. Then the default and converged discretisations agree to 3e-4 (−1.69955e5 against
+−1.69901e5), and Xyce (−1.65e5) and HSPICE with `.option delmax=10p` (−1.74e5) land within a
+few percent.
 
 ## Training photonic parameters
 

@@ -42,7 +42,7 @@ HSPICE V-2023.12-SP2, `spipe.config` defaults unless the example says otherwise.
 | `oeo_optical_delay.py` | refuses; 15.68 ns of optical delay against a 25 ps time step, `max_group_delay / dt = 627` |
 | `derived/n1_dac.py` | swing **3.272953 V** (sky130 3.274181), LSB **25.7713 mV** (25.7810), 1% settling **2.728 ns** (2.730), monotonic (sky130 is not), INL/DNL 0.381 / 0.748 LSB (sky130 2.517 / 2.517) |
 | `derived/n1_dac.py --native` | the same 128-code transfer solved by `spipe.electronic.native`: **max &#124;native - HSPICE&#124; = 17 uV = 0.0007 LSB** |
-| `derived/n2_mzm_driver.py` | eye 2.1 -> 362 uA as W goes 4 -> 64 um; **d(eye)/dW = 8.78 uA/um** at W = 16 um (re-measured after the `mzm` passivity fix: a 30 dB extinction ratio now correctly costs 0.27 dB of light) |
+| `derived/n2_mzm_driver.py` | the eye grows from about 0 to about 350 uA as W goes 4 -> 64 um; d(eye)/dW at W = 16 um is **8.78 uA/um on HSPICE, 8.38 on Xyce, 8.20 on the built-in engine** (see below) |
 | `derived/n3_tia.py` | real TIA 8.00 kOhm and 480 ps against the ideal block's 9.99 kOhm and 60 ps (re-measured after the `mzm` passivity fix, which moves the TIA's operating point slightly) |
 | `derived/n4_ptc_dotproduct.py` | photonic section byte-identical to `paper/ptc_hspice/test12.sp`; 2 fixed-point iterations; DAC error 1.44 LSB worst case; dot products within 0.25-0.89 V of closed form on a +-20 V scale |
 
@@ -67,10 +67,29 @@ python examples/derived/n4_ptc_dotproduct.py --tia   # also swap in N3's real fr
 `mesh_vs_lumerical.py` needs nothing but SPIPE. The `derived/` and loop examples run on
 whichever electronic engine is available: HSPICE if `which hspice` finds it, then Xyce, and
 otherwise SPIPE's built-in engine. Each prints the engine it used; choose one with `--sim`.
-The numbers quoted on this page were produced with HSPICE. The built-in engine reproduces
-them closely — `n3_tia.py`'s real front end, for example, has a transimpedance of 8.0024 kΩ
-there against 8.0000 kΩ on HSPICE — but is slower: `n1_dac.py`, which runs 128 transients,
+The numbers quoted on this page were produced with HSPICE unless stated otherwise. The engines
+agree closely on some circuits: `n3_tia.py`'s real front end has a transimpedance of 8.0024 kΩ
+on the built-in engine against 8.0000 kΩ on HSPICE. On others they differ by up to ~10 %, as
+`n2` does below, because the simulators' device capacitance models are not identical. The
+built-in engine is also slower: `n1_dac.py`, which runs 128 transients,
 takes about 25 minutes on it.
+
+### The same circuit on three engines
+
+`n2_mzm_driver.py --sim {hspice,xyce,native}` gives:
+
+| W | HSPICE | Xyce | built-in |
+|---|---|---|---|
+| 4 µm, eye | 1.9 µA | −3.1 µA | −5.4 µA |
+| 16 µm, eye | 116.0 µA | 104.4 µA | 102.6 µA |
+| 64 µm, eye | 362.1 µA | 352.9 µA | 343.0 µA |
+| d(eye)/dW at 16 µm | 8.78 µA/µm | 8.38 µA/µm | 8.20 µA/µm |
+
+The built-in engine follows Xyce to within 2–3 %. HSPICE sits about 10 % higher, because the
+simulators' level-1 capacitance models differ; the built-in engine follows Xyce's. At 4 µm the
+eye is essentially closed, and its sign is within that spread. HSPICE also takes 3–4 fixed-point
+iterations where the others take 2, on a circuit with no feedback: two HSPICE runs of the same
+deck differ slightly, and the iteration has to see that settle.
 
 ## The SKY130 models, for `paper/ptc_hspice/` only
 
@@ -92,8 +111,14 @@ library names actually resolves, rather than leaving a tree that installs cleanl
 inside the simulator.
 
 **Nothing else needs them.** `derived/` rebuilds the same circuits on Level-1 devices with
-no foundry models at all, and agrees with the SKY130 originals closely — 17 µV across the
-whole 128-code DAC transfer.
+no foundry models at all.
+- **Against the SKY130 DAC:** the level-1 version reproduces its full-scale swing to 1.2 mV
+  (3.2730 V against 3.2742 V) and its settling time, but that match is by construction: its load
+  capacitance is fitted to that settling time.
+- **Linearity does not match:** INL is 0.38 LSB against 2.52 LSB, because the SKY130 part's
+  architecture differs; `n1_dac.py` explains why.
+- **The 17 µV figure is a different comparison:** the built-in engine against HSPICE, on the same
+  level-1 circuit.
 
 Common options: `--sim {auto,hspice,xyce,native}` (default `auto`), `--spice-exe '<command
 line>'` (or the `SPIPE_SPICE_EXE` environment variable), `--work-dir`, `--max-iter`, `--plot`. Each example writes the netlist it

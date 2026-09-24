@@ -91,6 +91,18 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default = 0)
     args = parser.parse_args()
 
+    # These decks instantiate the SkyWater SKY130 transistors, which are third-party and not
+    # shipped. Without them HSPICE stops with "job aborted"; say what is missing instead.
+    _sky130 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'dac_model', 'sky130_fd_pr', 'models', 'sky130.lib.spice')
+    if not os.path.exists(_sky130):
+        raise SystemExit(
+            "This paper deck needs the SkyWater SKY130 transistor models, in HSPICE syntax, at\n"
+            f"  {_sky130}\n"
+            "They are third-party and not shipped with SPIPE: install them with "
+            "scripts/fetch_sky130.sh (see examples/README.md).\n"
+            "examples/derived/ rebuilds these circuits on level-1 devices and needs no models.")
+
     random.seed(args.seed)
 
     act_l, coeff1, neff, r0, mag, rload = 200e-6, 1e-3, 2.35, 1e-3, 1.0, 1e3

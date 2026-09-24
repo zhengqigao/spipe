@@ -8,7 +8,7 @@ python test/run_all.py          # single PASS/FAIL verdict
 python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 436 checks, 11 benches
+## Summary: 439 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
@@ -16,11 +16,11 @@ python test/run_all.py --quick  # the fast subset
 | `tb02_eo_interface` | the `mzm` modulator against textbook MZM physics, including passivity | 41 |
 | `tb03_oe_interface` | photodetector noise (magnitude, correlation, independence of the time step), bandwidth, and the detector options | 24 |
 | `tb04_native_analytic` | built-in engine vs closed-form solutions | 35 |
-| `tb05_native_crosstool` | built-in engine vs HSPICE and Xyce | 33 |
+| `tb05_native_crosstool` | built-in engine vs HSPICE and Xyce, and the HSPICE back end's sampling | 34 |
 | `tb06_native_gradients` | autograd vs adjoint vs finite difference | 59 |
 | `tb07_fixedpoint` | convergence, divergence, bistability, stability of the converged state | 35 |
 | `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
-| `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 92 |
+| `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 94 |
 | `tb11_envelope_P3` | optical memory / envelope propagation, its gradients and its failure checks | 18 |
 | `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain, including electrical probes, detector noise and envelope mode | 35 |
 
@@ -107,7 +107,7 @@ Gradients:
 
 | check | measured |
 |---|---|
-| autograd vs time-domain adjoint | **exactly 0.00e+00** |
+| autograd vs time-domain adjoint (the same computation by construction: a consistency check, not a validation) | **exactly 0.00e+00** |
 | autograd vs central finite difference | 7.7e-11 |
 | adjoint cost, 5 parameters vs 1 | **1.03×** (a true single backward sweep) |
 
@@ -125,7 +125,9 @@ whole co-simulation — on `examples/link_driver_mzm.sp`:
 | finite difference, best step | `29.19573971` |
 | **relative error** | **`4.6e-08`** |
 
-`4.6e-08` is the bottom of a step-size sweep: larger steps are limited by the finite
+This is exactness for the circuit as simulated; how close the default discretisation is to
+the converged circuit on this example (14 %) is discussed in
+[differentiability.md](differentiability.md). `4.6e-08` is the bottom of a step-size sweep: larger steps are limited by the finite
 difference's own truncation error, smaller ones by round-off. The limit is the finite
 difference, not the gradient. See [differentiability.md](differentiability.md).
 

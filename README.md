@@ -154,6 +154,13 @@ w.grad                                   # d(loss)/dW = 29.19573838
 That is the entire program. Checked against finite differences over the whole chain, the
 gradient agrees to **4.6e-08** — as closely as a finite difference through a transient simulation can check it (the sweep is in [docs/differentiability.md](docs/differentiability.md)).
 
+"Exact" means exact for the circuit **as simulated**. This example takes 40 samples, and the
+built-in engine uses at most 8 internal steps per sample. The loss here depends on W only
+through the sub-millivolt tails after each edge, which that discretisation gets to about 14%:
+with `spipe.config['native_nsub'] = 64` the same gradient is 25.60. When the number itself
+matters, raise `native_nsub` or sample more finely
+([docs/backends.md](docs/backends.md)).
+
 There is only **one** simulation call, and **`.sensparam` is the only switch**. Every
 parameter it names comes back from `ckt.param(...)` already marked `requires_grad=True`, so
 there is nothing to set in Python. Without a `.sensparam` line, `simulate()` runs an ordinary
@@ -200,7 +207,7 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**436 checks, and the exit status is 0 only if every one passed**, so it drops straight
+**439 checks, and the exit status is 0 only if every one passed**, so it drops straight
 into CI. `--quick` runs the fast ~300 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
@@ -228,7 +235,7 @@ examples/
 ├── oeo_electronic.py       optoelectronic oscillator (electronic-delay loop)
 ├── bistable_latch.py       optical bistability -- two stable states
 ├── bias_control.py         automatic modulator bias control at quadrature
-├── oeo_optical_delay.py    a case SPIPE deliberately REFUSES to simulate
+├── oeo_optical_delay.py    a case the default mode cannot represent, diagnosed
 ├── link_driver_mzm.sp      the two-domain netlist used above
 ├── derived/                the paper's circuits on level-1 devices: any engine, no PDK needed
 └── paper/                  the figures from the TCAD paper
@@ -249,8 +256,9 @@ no optical memory there is no delay, so resonator ring-up and delay-set oscillat
 
 SPIPE is explicit about this rather than quiet. It warns, with numbers, when a circuit is
 approaching the boundary; `mode='envelope'` lifts the restriction by giving the network a
-real impulse response; and `examples/oeo_optical_delay.py` is an oscillator SPIPE *refuses*
-to simulate, printing why instead of returning a plausible wrong number.
+real impulse response; and `examples/oeo_optical_delay.py` shows an oscillator the default
+mode cannot represent. The library itself only warns; the example then stops and prints why,
+instead of reporting a plausible wrong number.
 
 The full discussion, including two further assumptions worth knowing about:
 [docs/scope.md](docs/scope.md).

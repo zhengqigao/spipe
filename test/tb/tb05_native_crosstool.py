@@ -3,7 +3,7 @@
 The SAME netlist body goes to all three engines; only the control cards differ.
 Written from SPEC_E1.md only.
 """
-import sys, os, subprocess, tempfile, math
+import sys, os, subprocess, tempfile, math, warnings
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from harness import TB, main, REPO
 
@@ -280,6 +280,32 @@ def build():
                 tb.close('ring.vs_hspice', fn, fh, RING_TOL,
                          detail=f"native={fn/1e9:.4f} GHz  hspice={fh/1e9:.4f} GHz "
                                 f"(hspice and xyce are themselves 5.02% apart)")
+
+    # ---- the HSPICE back end reads its samples, it does not interpolate them ------
+    # The HSPICE deck printed every span/(5N), which does not divide the sample spacing
+    # span/(N-1): each sample was interpolated between print points ~0.2 ns apart, and on the
+    # README example a sample on a 0.2 ns edge read 0.19 V where the waveform is at 0.01 V.
+    import shutil as _sh
+    if _sh.which(os.environ.get('SPIPE_HSPICE', 'hspice')):
+        try:
+            import spipe as _sp
+            _link = os.path.join(REPO, 'examples', 'link_driver_mzm.sp')
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                with torch.no_grad():
+                    _vh = _sp.Circuit(_link, 'hspice').simulate()[3][:, 0]
+                    _sp.config['native_nsub'] = 64
+                    try:
+                        _vn = _sp.Circuit(_link, 'native').simulate()[3][:, 0]
+                    finally:
+                        _sp.config['native_nsub'] = None
+            tb.lt('hspice.edge_sample_not_interpolated', abs(float(_vh[11] - _vn[11])), 5e-3,
+                  f'drive at t = 11.28 ns, on a switching edge: hspice {float(_vh[11]):.4f} V, '
+                  f'native (converged) {float(_vn[11]):.4f} V')
+        except Exception as e:
+            tb.ok('hspice.edge_sample_not_interpolated', False, repr(e))
+    else:
+        tb.skip('hspice.edge_sample_not_interpolated', 'HSPICE not on PATH')
 
     print(f"\n[tb05 work dir: {WRK}]")
     return tb

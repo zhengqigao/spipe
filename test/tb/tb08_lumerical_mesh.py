@@ -45,7 +45,9 @@ def _load_mesh_module():
     # $SPIPE_INTERCONNECT_DIR at import time, so it has to be set before the import.
     if not os.environ.get('SPIPE_INTERCONNECT_DIR'):
         import shutil, tempfile
+        import atexit
         scratch = tempfile.mkdtemp(prefix='spipe_interconnect_')
+        atexit.register(shutil.rmtree, scratch, True)      # removed when the bench exits
         shutil.copytree(os.path.join(os.path.dirname(MESH_EXAMPLE), 'interconnect'),
                         os.path.join(scratch, 'interconnect'))
         os.environ['SPIPE_INTERCONNECT_DIR'] = os.path.join(scratch, 'interconnect')

@@ -332,9 +332,20 @@ def _run_spice(command: List[str], outputs: List[str]) -> None:
     if proc.returncode != 0:
         text = (proc.stderr or '') + (proc.stdout or '')
         tail = '\n'.join(text.strip().splitlines()[-15:])
+        # HSPICE writes the reason to its listing, not to the terminal ("job aborted" is all
+        # the terminal says), and the listing goes when the scratch directory does. Quote it.
+        errors = []
+        for path in outputs:
+            if path.endswith('.lis') and os.path.exists(path):
+                with open(path, errors='replace') as listing:
+                    lines = listing.read().splitlines()
+                for i, line in enumerate(lines):
+                    if '**error**' in line.lower():
+                        errors.append('    ' + ' '.join(x.strip() for x in lines[i:i + 3]))
+        found = ("\n  errors in the listing:\n" + '\n'.join(errors[:10])) if errors else ''
         raise RuntimeError(
             f"{os.path.basename(command[0])} exited with status {proc.returncode}.\n"
-            f"  command: {' '.join(shlex.quote(c) for c in command)}\n"
+            f"  command: {' '.join(shlex.quote(c) for c in command)}{found}\n"
             f"  last output:\n{tail}")
 
 
@@ -1527,7 +1538,12 @@ def _run_hspice(t_value: torch.Tensor,
     device-parameter backward can re-run the same deck without duplicating the parser.
     """
     with open(param_file_path, 'w') as f:
-        f.write(f".Tran {(max(t_value)-min(t_value)) / 5 / len(t_value)} {max(t_value)} start={min(t_value)} uic\n")
+        # Print step: a fifth of the sample spacing, so that every sample is itself a printed
+        # point. It used to be span/(5 N), which does not divide the spacing span/(N-1): each
+        # sample was then interpolated between print points ~0.2 ns apart, and a sample on a
+        # 0.2 ns edge read 0.19 V where the waveform is at 0.01 V -- the HSPICE gradient of the
+        # README example came out ~500x too large from that alone.
+        f.write(f".Tran {(max(t_value)-min(t_value)) / 5 / max(len(t_value) - 1, 1)} {max(t_value)} start={min(t_value)} uic\n")
         for i in range(len(t_value)):
             f.write(f'.PARAM param_t{i}={t_value[i]}\n')
 
@@ -1669,8 +1685,9 @@ class SimulateHspice(torch.autograd.Function):
         relative = float(config.get('fd_step', 1e-3))
         warnings.warn(
             f"Computing d(objective)/d({', '.join(ctx.sens_names)}) on the HSPICE back end "
-            f"by central finite differences: {2 * len(ctx.sens_names)} extra HSPICE "
-            f"transient runs for this one backward pass. The Xyce and native back ends do "
+            f"by central finite differences: {4 * len(ctx.sens_names)} extra HSPICE "
+            f"transient runs for this one backward pass (two step sizes, to check the "
+            f"difference is not simulator noise). The Xyce and native back ends do "
             f"this analytically; see SimulateHspice.backward.", RuntimeWarning, stacklevel=2)
 
         device_grads = []
@@ -1678,21 +1695,38 @@ class SimulateHspice(torch.autograd.Function):
             tensor = owner.sens_values[(device.lower(), parameter)]
             nominal = float(tensor.detach())
             step = relative * abs(nominal) if nominal != 0.0 else relative
-            samples = []
-            for shifted in (nominal + step, nominal - step):
-                with torch.no_grad():
-                    tensor.fill_(shifted)
-                owner._write_spice_deck()
-                result, _ = _run_hspice(ctx.t_value, ctx.param_value, ctx.spice_file_path,
-                                        ctx.param_file_path, ctx.spice_exe, ctx.keep_spice)
-                samples.append(result[:, :ctx.num_out].detach().to(torch.float64))
+            estimates = []
+            # The same difference at two step sizes. HSPICE picks its own time steps, and its
+            # output moves with W in jumps as well as smoothly; where the jumps dominate, the
+            # "derivative" is noise -- on the README's own example it came out ~500x the true
+            # value with nothing but a cost warning. Two steps that disagree expose that.
+            for h in (step, 4.0 * step):
+                samples = []
+                for shifted in (nominal + h, nominal - h):
+                    with torch.no_grad():
+                        tensor.fill_(shifted)
+                    owner._write_spice_deck()
+                    result, _ = _run_hspice(ctx.t_value, ctx.param_value, ctx.spice_file_path,
+                                            ctx.param_file_path, ctx.spice_exe, ctx.keep_spice)
+                    samples.append(result[:, :ctx.num_out].detach().to(torch.float64))
+                block = (samples[0] - samples[1]) / (2.0 * h)
+                if h == step:
+                    guard_all_zero(block, [name], ctx.objective, 'finite-difference', 'hspice',
+                                   objective_name='the modulator drive voltage')
+                estimates.append((cotangent * block).sum())
             with torch.no_grad():
                 tensor.fill_(nominal)
             owner._write_spice_deck()
 
-            block = (samples[0] - samples[1]) / (2.0 * step)
-            guard_all_zero(block, [name], ctx.objective, 'finite-difference', 'hspice',
-                           objective_name='the modulator drive voltage')
-            device_grads.append((cotangent * block).sum())
+            fine, coarse = float(estimates[0]), float(estimates[1])
+            if abs(fine - coarse) > 0.1 * max(abs(fine), abs(coarse)):
+                warnings.warn(
+                    f"The HSPICE finite-difference gradient with respect to {name} is not "
+                    f"trustworthy: a step of {relative:g}*{parameter} gives {fine:.6g}, a step four "
+                    f"times larger gives {coarse:.6g}. HSPICE's adaptive time steps make its "
+                    f"output jump as {parameter} changes, and the difference is measuring those "
+                    f"jumps. Use spice_exe='native' for an exact gradient (or Xyce), or treat "
+                    f"this number as unknown.", RuntimeWarning, stacklevel=2)
+            device_grads.append(estimates[0])
 
         return (None,) * 11 + tuple(device_grads)

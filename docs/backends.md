@@ -131,9 +131,15 @@ Measured end to end on a level-1 CMOS driver into a modulator:
   device derivatives are numerical, and it says so. The finite-difference reference is
   itself inconsistent at the tens-of-percent level, because Xyce's transient is only
   reproducible to ~2e-4 relative with respect to its own inputs.
-- **HSPICE** — reaches about 5e-2, by re-running the deck.
-- **Built-in** — the same measurement comes out at 4e-5, and its autograd and adjoint agree
-  with each other to exactly zero.
+- **HSPICE** — reaches about 5e-2 on that circuit, by re-running the deck. That depends on the
+  circuit. HSPICE picks its own time steps, and at its defaults a fast edge is resolved too
+  coarsely for a gradient. On `examples/link_driver_mzm.sp` sampled every 0.1 ns, it gave a
+  width gradient of −3.5e5 where the built-in engine and Xyce give −1.70e5 and −1.65e5. Adding
+  `.option delmax=10p` to the deck brought it to −1.74e5. SPIPE repeats each HSPICE finite
+  difference at a second step size, and warns when the two disagree.
+- **Built-in** — the same measurement comes out at 4e-5. Its autograd and adjoint also agree to
+  exactly zero, but they share one implementation, so that is a consistency property rather
+  than a second check.
 
 ## SPICE repeatability, for feedback circuits
 

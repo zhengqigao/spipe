@@ -146,6 +146,18 @@ if __name__ == '__main__':
     parser.add_argument('--file_path', type=str, default='test12.sp')
     parser.add_argument('--sim', type=str, default='hspice')
     args = parser.parse_args()
+
+    # These decks instantiate the SkyWater SKY130 transistors, which are third-party and not
+    # shipped. Without them HSPICE stops with "job aborted"; say what is missing instead.
+    _sky130 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'dac_model', 'sky130_fd_pr', 'models', 'sky130.lib.spice')
+    if not os.path.exists(_sky130):
+        raise SystemExit(
+            "This paper deck needs the SkyWater SKY130 transistor models, in HSPICE syntax, at\n"
+            f"  {_sky130}\n"
+            "They are third-party and not shipped with SPIPE: install them with "
+            "scripts/fetch_sky130.sh (see examples/README.md).\n"
+            "examples/derived/ rebuilds these circuits on level-1 devices and needs no models.")
     config['max_iter'] = args.max_iter
 
     random.seed(0)

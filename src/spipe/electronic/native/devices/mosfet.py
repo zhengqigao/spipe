@@ -166,6 +166,14 @@ class Mosfet(DeviceGroup):
             except SpiceSyntaxError:
                 pass
 
+        # HSPICE and Xyce stop on these; the square law just returns nonsense (L=0 gave
+        # 1.25e-25 V, W<0 a 9 V node on a 3 V supply).
+        for key in ("W", "L"):
+            if not float(vals[key]) > 0.0:
+                raise SpiceSyntaxError(
+                    "MOSFET %s: %s=%g, but a channel %s must be positive."
+                    % (elem.name.upper(), key, float(vals[key]),
+                       "width" if key == "W" else "length"))
         if vals["COX"] == 0.0 and vals["TOX"] > 0.0:
             vals["COX"] = EPS_OX / vals["TOX"]
         if "kp" not in mp and vals["UO"] > 0.0 and vals["COX"] > 0.0:

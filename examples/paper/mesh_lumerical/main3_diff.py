@@ -159,7 +159,8 @@ if __name__ == '__main__':
                         help='largest mesh (N x N) in the 3, 6, 9, ... sweep; the default 30 takes '
                              'hours, because every one of the 1,860 phase shifters of a 30x30 '
                              'mesh costs four finite-difference solves. Try --max_size 9.')
-    parser.add_argument('--plot', type=bool, default=True)
+    parser.add_argument('--plot', action=argparse.BooleanOptionalAction, default=True,
+                        help='draw the plots (--no-plot to skip them)')
     parser.add_argument('--save_plot', action='store_true', default = False)
     parser.add_argument('--gpu', type = int, default = -1)
     args = parser.parse_args()

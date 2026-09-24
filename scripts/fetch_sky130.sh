@@ -73,7 +73,7 @@ then point this script at the result:
 
 Everything else in SPIPE runs without this: the built-in engine needs no PDK, and
 examples/derived/ reproduces the same circuits on Level-1 devices (see
-examples/README.md for the measured agreement, e.g. 17 uV on the DAC transfer).
+examples/README.md for how closely they agree, and where they do not).
 MSG
     exit 1
 fi
