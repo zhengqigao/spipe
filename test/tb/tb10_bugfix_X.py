@@ -447,6 +447,43 @@ def build():
                  detail=f"Ic through Rc = {ic_kcl * 1e6:.4f} uA vs the Gummel-Poon law "
                         f"at the solved Vbc = {vbc:.4f} V (forward active)")
 
+    # ---------------- X14 : gradients on a GPU ------------------------------
+    # Simulate.forward built its detector index on the CPU; backward then index_add_-ed a
+    # CUDA tensor with it and raised "Expected all tensors to be on the same device". The
+    # forward pass ran fine, so only gradients on a GPU were broken -- all of them.
+    if not torch.cuda.is_available():
+        tb.skip('X14.gpu_gradient_matches_cpu',
+                'no CUDA device here; this guard runs wherever one exists')
+    else:
+        from spipe.photonic.photonic import Photonic as _Ph14
+        _net14 = [l + "\n" for l in [
+            ".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 193.1e12 193.3e12 4",
+            ".source 1.0@a1 0.0@a2",
+            "mzm0 a1 a2 b1 b2 vdrv level3 vpi=2.0 vbias=0.0 il=0.0",
+            "pd1 b1 vo1 level1 r0=1.0", "pd2 b2 vo2 level1 r0=1.0"]]
+
+        def _grad14(dev):
+            sp.config['device'] = dev
+            t = torch.linspace(0, 1e-9, 8, dtype=torch.float64, device=dev)
+            v = torch.linspace(0, 2, 8, dtype=torch.float64,
+                               device=dev).reshape(-1, 1).clone().requires_grad_(True)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                out, _, _ = _Ph14(_net14, need_grads=True).simulate(t, v)
+            (out[:, 0] ** 2).sum().backward()
+            return v.grad.detach().cpu()
+
+        try:
+            g_cpu = _grad14(torch.device('cpu'))
+            ok14, g_gpu = tb.no_raise('X14.gpu_gradient_runs',
+                                      lambda: _grad14(torch.device('cuda:0')),
+                                      'backward() on cuda:0 must not raise a device mismatch')
+            if ok14 and g_gpu is not None:
+                tb.lt('X14.gpu_gradient_matches_cpu', float((g_gpu - g_cpu).abs().max()), 1e-10,
+                      'the same gradient on GPU and CPU (complex128)')
+        finally:
+            sp.config['device'] = torch.device('cpu')
+
     return tb
 
 

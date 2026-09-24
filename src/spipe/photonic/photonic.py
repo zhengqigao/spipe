@@ -772,7 +772,11 @@ class Simulate(torch.autograd.Function):
                 need_grads: bool):
         try:
             dout_node, prob_node = node_tuple
-            detect_ind = torch.tensor([node2ind[node] for node in dout_node], dtype=torch.long)
+            # On the configured device: backward index_add_s CUDA tensors with this, and a CPU
+            # index there raised 'Expected all tensors to be on the same device' -- so every
+            # gradient on a GPU failed, while the forward pass ran fine.
+            detect_ind = torch.tensor([node2ind[node] for node in dout_node], dtype=torch.long,
+                                      device=config['device'])
             prob_ind = torch.tensor([node2ind[node] for node in prob_node], dtype=torch.long)
         except KeyError:
             raise KeyError("At least one node required by photo detector and .prob syntax is not in the circuit.")
