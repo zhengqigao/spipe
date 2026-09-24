@@ -146,7 +146,7 @@ w.grad                                   # d(loss)/dW = 29.19573838
 ```
 
 That is the entire program. Checked against finite differences over the whole chain, the
-gradient is right to **8 significant figures**.
+gradient agrees to **4.6e-08** — as closely as a finite difference through a transient simulation can check it (the sweep is in [docs/differentiability.md](docs/differentiability.md)).
 
 There is only **one** simulation call. `simulate()` follows the usual PyTorch convention:
 gradients cost nothing unless you ask for them, and you ask for them by declaring a

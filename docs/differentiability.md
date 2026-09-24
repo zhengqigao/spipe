@@ -73,12 +73,16 @@ There is one `simulate()`. It decides for itself:
 | called inside `torch.no_grad()` | plain run, no graph |
 | a declared parameter requires grad | **builds the graph**, about 1.65× the plain runtime |
 
-The returned values agree either way, but they are **not bit-identical**, and deliberately
-so. The differentiable path solves the fixed point gradient-free and then rebuilds one
-round trip at the converged point, so it returns `g(f(V*))` where the plain path returns
-`V*`. Those differ by the converged residual — measured at `9.3e-08` on
-`examples/link_driver_mzm.sp`, four orders of magnitude inside the default convergence
-threshold. Tighten `spipe.config['rtol']` and the gap closes with it.
+The returned values are the same either way — measured to agree to `5.6e-16` on
+`examples/link_driver_mzm.sp`, i.e. machine precision. The differentiable path solves the
+fixed point gradient-free and then rebuilds one round trip at the converged point, so it
+returns `g(f(V*))` where the plain path returns `V*`; at a converged fixed point those are
+the same number.
+
+(Earlier releases showed a `9.3e-08` gap here that no convergence tolerance could close. It
+was not residual: the fixed-point iterate was being created in float32 regardless of
+`config['real_dtype']`, and the gap was float32 rounding of the modulator drive. That is
+fixed, and `test/tb/tb12_end_to_end_grad.py` guards it.)
 
 `differentiable_simulate()` still exists if you want to force the issue, but you should not
 normally need it.
@@ -91,8 +95,20 @@ Mach–Zehnder modulator:
 | | through `Circuit.simulate()` | composing the two solvers by hand |
 |---|---|---|
 | analytic | `29.19573838` | `-115016.7648` |
-| finite difference | `29.19573860` | `-115016.7645` |
-| **relative error** | **`7.6e-09`** | **`1.9e-09`** |
+| finite difference | `29.19573971` | `-115016.7645` |
+| **relative error** | **`4.6e-08`** | **`1.9e-09`** |
+
+A single finite-difference number can mislead, so the first column comes from a step-size
+sweep. The error falls as `h²` while truncation dominates, bottoms out at `h/W = 1e-4`,
+then *rises* as `1/h` once round-off in the transient solve takes over:
+
+| step `h/W` | `1e-2` | `1e-3` | `1e-4` | `1e-5` | `1e-6` | `1e-7` |
+|---|---|---|---|---|---|---|
+| relative error | `1.9e-04` | `1.9e-06` | **`4.6e-08`** | `1.3e-07` | `6.4e-07` | `1.2e-05` |
+
+That V-shape is the signature of an exact analytic gradient: the disagreement is the finite
+difference's, not the adjoint's, and `4.6e-08` is simply as closely as a finite difference
+through an adaptive-step transient can check it.
 
 Both routes are checked in `test/tb/tb12_end_to_end_grad.py`. The unified call is what you
 want in practice; composing `Netlist` and `Photonic` yourself is only useful when you need

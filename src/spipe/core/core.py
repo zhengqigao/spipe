@@ -299,10 +299,11 @@ def solve_fixed_point(step: Callable[[torch.Tensor], torch.Tensor],
         if not isinstance(g, torch.Tensor):
             g = torch.as_tensor(g, dtype=x.dtype, device=x.device)
         elif g.dtype != x.dtype or g.device != x.device:
-            # The SPICE back end returns float32 whatever the iterate is; keeping the whole
+            # The SPICE back ends return float32 whatever the iterate is; keeping the whole
             # iteration in one dtype is what stops the Anderson history from becoming a mix of
-            # float32 and float64 tensors.  ``.to()`` is a no-op when they already agree, so the
-            # historical float32 path is untouched, bit for bit.
+            # float32 and float64 tensors.  The iterate itself is created at
+            # config['real_dtype'] (see Circuit.gradient_free_simulate), so a float32 SPICE
+            # result is widened here, never the float64 iterate narrowed.
             g = g.to(dtype=x.dtype, device=x.device)
 
         f = g - x                                            # the fixed-point residual vector
@@ -731,9 +732,18 @@ class Circuit(object):
             seed = config['seed'] if seed is None else seed
             generator = torch.Generator(device=config['device'])
             generator.manual_seed(int(seed))
-            param_p = torch.randn(*shape, generator=generator, device=config['device'])
+            param_p = torch.randn(*shape, generator=generator, device=config['device'],
+                                  dtype=config['real_dtype'])
         else:
-            param_p = torch.as_tensor(x0, device=config['device']).expand(shape).clone()
+            param_p = torch.as_tensor(x0, device=config['device'],
+                                      dtype=config['real_dtype']).expand(shape).clone()
+
+        # Both branches pin the dtype. solve_fixed_point() casts every iterate to the dtype of
+        # the initial guess, and torch.randn / torch.as_tensor(float) default to float32 -- so
+        # without this the whole co-simulation fixed point ran in single precision even with
+        # real_dtype = float64. The converged drive came back float32, and the differentiable
+        # and plain paths disagreed by 9.3e-08 at ANY convergence tolerance (float32 rounding,
+        # not residual). With it they agree to 5.6e-16.
 
         # X2: scale-free convergence test, and everything else about the iteration, now lives in
         # solve_fixed_point() -- a SPICE-free, independently testable function.  This method is a

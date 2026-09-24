@@ -263,6 +263,38 @@ def build():
     except Exception as e:
         tb.ok('E2.ift_matches_closed_form', False, f"{e!r}")
 
+    # ------------------------------------------------------------------
+    # The co-simulation fixed point must run at config['real_dtype']. Its initial
+    # guess was created with torch.randn / torch.as_tensor and no dtype -- float32 --
+    # and solve_fixed_point casts every iterate to the guess's dtype, so the whole
+    # iteration ran in single precision. Symptom: the differentiable and plain paths
+    # disagreed by 9.3e-08 at ANY tolerance. Fixed, they agree to machine precision.
+    # ------------------------------------------------------------------
+    try:
+        from spipe.core.core import Circuit
+        link = os.path.join(REPO, 'examples', 'link_driver_mzm.sp')
+        c_rand = Circuit(link, spice_exe='native')
+        with torch.no_grad():
+            out_rand = c_rand.simulate()
+        c_x0 = Circuit(link, spice_exe='native')
+        with torch.no_grad():
+            out_x0 = c_x0.simulate(x0=0.65)
+        want = sp.config['real_dtype']
+        tb.ok('E2.fixed_point_dtype_random_guess', out_rand[3].dtype == want,
+              f"converged drive is {out_rand[3].dtype}, config real_dtype is {want}")
+        tb.ok('E2.fixed_point_dtype_explicit_x0', out_x0[3].dtype == want,
+              f"x0=0.65 (a Python float) must not default the iteration to float32: "
+              f"got {out_x0[3].dtype}")
+
+        c_diff = Circuit(link, spice_exe='native')
+        pc_diff = c_diff.simulate()[2].detach()
+        gap = float((pc_diff - out_rand[2]).abs().max())
+        tb.lt('E2.diff_and_plain_paths_agree', gap, 1e-12,
+              f"max |differentiable - plain| photocurrent = {gap:.3e}; float32 rounding of "
+              f"the drive made this 9.3e-08 regardless of rtol")
+    except Exception as e:
+        tb.ok('E2.fixed_point_dtype_random_guess', False, f"{e!r}")
+
     # gradient_based_simulate must be implemented or deleted, never left as a
     # commented-out block that reads like a feature.
     try:
