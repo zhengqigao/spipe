@@ -61,7 +61,7 @@ are driven by a voltage:
 
 | prefix | ports | what it is | key parameters |
 |---|---|---|---|
-| `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0, default 2), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=`; less common: `act_l=`, `kappa1=`, `kappa2=`, `wgu_l=`, `wgl_l=`, `dacoeff0=`… (see below) |
+| `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0, default 2), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time; less common: `act_l=`, `kappa1=`, `kappa2=`, `wgu_l=`, `wgl_l=`, `dacoeff0=`… (see below) |
 | `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
 | `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
 | `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W (required), `bw=` bandwidth in Hz, `idark=` dark current in A, `noise=`, `temp=`, `rload=`, `inoise=`, `coherent=1` — see *Photodetector bandwidth and noise* below |

@@ -9,14 +9,14 @@ Stated in the paper. A drive `v(t)` produces phase `φ(t)` with no transient. Va
 modulator's own response time is far shorter than the drive's timescale — true for
 free-carrier plasma dispersion (~0.1 ps) against a 10 Gsps DAC (100 ps).
 
-**Resolved by:** two parameters of the `mzm` model, `tau` and `order`, which give the
-modulator a finite response time. With them the modulator model differs from the one in the
-original paper. `tau=0` (the default) reproduces the paper's instantaneous model bit for bit.
+**Resolved by:** the `mzm` model's `tau` parameter, which gives the modulator a finite
+response time. With it the modulator model differs from the one in the original paper.
+`tau=0` (the default) reproduces the paper's instantaneous model bit for bit.
 
 ### The equations
 
-**First order (`order=1`, the default when `tau` is set).** The phase difference between the
-two arms, `Δφ`, follows the drive with a first-order response of time constant `τ`:
+**With a response time (`tau > 0`).** The phase difference between the two arms, `Δφ`,
+follows the drive with a first-order response of time constant `τ`:
 
 ```
 τ · dΔφ/dt + Δφ = π · (V(t) − vbias) / vpi
@@ -35,39 +35,29 @@ The phase follows the drive at once. This is the model used most often, includin
 paper (its Assumption 1). It is accurate whenever the drive changes slowly compared with the
 modulator's response.
 
-**General order (`order=n`).**
+The response is applied to `V − vbias` before anything else, and the loss modulation
+(`dacoeff*`) follows the same filtered drive, as carrier density does in a real device.
 
-```
-(τ·d/dt + 1)ⁿ Δφ = π · (V(t) − vbias) / vpi
-```
+![mzm phase response to a drive step for several time constants](figures/modulator_response.png)
 
-With `n = 1` this is the first-order equation above. The response is applied to `V − vbias`
-before anything else, and the loss modulation (`dacoeff*`) follows the same filtered drive, as
-carrier density does in a real device.
+### Choosing `τ`
 
-![mzm phase response to a drive step for several orders and time constants](figures/modulator_response.png)
-
-### Choosing `τ` and `order`
-
-`τ` sets the modulator's electro-optic bandwidth. For `order=1`,
+`τ` sets the modulator's electro-optic bandwidth:
 
 ```
 f_3dB = 1 / (2π τ)        i.e.   τ = 1 / (2π f_3dB)
 ```
 
-| modulator bandwidth | `tau=` (with `order=1`) |
+| modulator bandwidth | `tau=` |
 |---|---|
 | 10 GHz | `15.9p` |
 | 20 GHz | `7.96p` |
 | 40 GHz | `3.98p` |
 | free-carrier limit, ~0.1 ps | effectively `0`: keep the default |
 
-With `order=n`, the same `τ` gives a lower bandwidth,
-`f_3dB = √(2^(1/n) − 1) / (2π τ)`. For example, `tau=8p` gives 19.9 GHz with `order=1` and
-12.8 GHz with `order=2`. Pick `n` to match the steepness of a measured frequency response,
-then `τ` to match its 3 dB point. When the modulator's bandwidth is set mainly by its RC
-(the driver charging the junction), model that on the electrical side instead, with the
-`level3` load. `tau=` is for the optical response of the device itself.
+When the modulator's bandwidth is set mainly by its RC (the driver charging the junction),
+model that on the electrical side instead, with the `level3` load. `tau=` is for the optical
+response of the device itself.
 
 ## Assumption 2: the photonic network settles instantly
 
