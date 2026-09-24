@@ -384,7 +384,14 @@ def _assemble(photonic, t_value: torch.Tensor, param_value: Optional[torch.Tenso
         if block.shape[0] == 1:
             time_varying = False
         elif block.shape[0] == num_time:
-            time_varying = not torch.equal(block, block[:1].expand_as(block))
+            # A modulator whose drive requires grad stays in the time-varying set even while the
+            # drive happens to be constant: its values would not change, but its *gradient* must
+            # carry the optical memory -- a change of drive reaches the detector only after the
+            # delay. Folding it into the static system handed the run to the quasi-static adjoint,
+            # which put d pd[50]/d drive[50] = 315 where it belongs on drive[40] (100 ps earlier).
+            time_varying = ((_entry_is_active(entry) and param_value is not None
+                             and param_value.requires_grad)
+                            or not torch.equal(block, block[:1].expand_as(block)))
         else:
             raise RuntimeError(
                 f"Model '{class_.__name__}' returned a scatter matrix whose leading (time) axis has "

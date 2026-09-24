@@ -200,7 +200,7 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**431 checks, and the exit status is 0 only if every one passed**, so it drops straight
+**436 checks, and the exit status is 0 only if every one passed**, so it drops straight
 into CI. `--quick` runs the fast ~300 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
@@ -263,6 +263,7 @@ The full discussion, including two further assumptions worth knowing about:
 | [docs/differentiability.md](docs/differentiability.md) | how the gradients are computed |
 | [docs/backends.md](docs/backends.md) | choosing an electronic engine, and their traps |
 | [docs/scope.md](docs/scope.md) | the physics assumptions and where they bind |
+| [docs/envelope.md](docs/envelope.md) | optical memory: delays and resonators in time (`mode='envelope'`) |
 | [docs/validation.md](docs/validation.md) | every measured number |
 
 ## Layout

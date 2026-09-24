@@ -754,6 +754,12 @@ class _ProbeTotalDerivative(torch.autograd.Function):
         return grad_output, ctx.vjp(grad_output), None
 
 
+def _check_mode(mode: str) -> None:
+    """Refuse a photonic mode that does not exist, instead of quietly running the default."""
+    if mode not in ('quasistatic', 'envelope'):
+        raise ValueError(f"mode must be 'quasistatic' or 'envelope', got {mode!r}.")
+
+
 class Circuit(object):
     def __init__(self,
                  file_path: str,
@@ -788,9 +794,11 @@ class Circuit(object):
         self.coupling_info: Dict[str, Any] = {}
 
         # X8: the steady-state photonic solve is only valid while the optical network settles
-        # much faster than one transient time step.  Warn (never raise) if that is not the case.
+        # much faster than one transient time step. Check now, with the modulators at zero
+        # drive, and again at the first simulate(), where the drive is known -- a modulator
+        # switched off at zero drive can hide a resonator (warns once, never raises).
         if self.time is not None and len(self.time) > 1:
-            self.p_circuit.check_quasistatic(float(self.time[1] - self.time[0]))
+            self.p_circuit.check_quasistatic(float(self.time[1] - self.time[0]), final=False)
 
     def simulate(self,
                  seed: Optional[int] = None,
@@ -827,8 +835,9 @@ class Circuit(object):
             with *multiple* stable fixed points -- an optical latch, say -- has genuinely more
             than one answer, and which one the solver reaches is a property of the initial
             guess, not of the circuit; this is how you choose.
-        :param mode: photonic solver mode, ``'quasistatic'`` (default) or ``'envelope'``.
-            Only consulted on the differentiable path; ``'envelope'`` does not carry gradients.
+        :param mode: photonic solver mode, ``'quasistatic'`` (default) or ``'envelope'``
+            (optical memory: delays and resonator ring-up inside the loop). Both are
+            differentiable with respect to ``.sensparam`` parameters.
         :param differentiable: force the choice instead of detecting it.  ``True`` always
             builds the graph (and warns if nothing can receive a gradient), ``False`` never
             does.  ``None``, the default, decides from whether any declared parameter
@@ -850,7 +859,7 @@ class Circuit(object):
             )
         if differentiable:
             return self.differentiable_simulate(self.time, seed=seed, x0=x0, mode=mode)
-        return self.gradient_free_simulate(self.time, seed=seed, x0=x0)
+        return self.gradient_free_simulate(self.time, seed=seed, x0=x0, mode=mode)
 
     def param(self, device: str, name: str) -> torch.Tensor:
         """The float64 leaf tensor holding one ``.sensparam`` electronic device parameter.
@@ -862,8 +871,10 @@ class Circuit(object):
 
     def gradient_free_simulate(self, t: torch.Tensor,
                                seed: Optional[int] = None,
-                               x0: Optional[torch.Tensor] = None
+                               x0: Optional[torch.Tensor] = None,
+                               mode: str = 'quasistatic'
                                ) -> Tuple[Dict, Dict, torch.Tensor, torch.Tensor, Dict]:
+        _check_mode(mode)
         # One noise realisation per run: every fixed-point iteration sees the same detector noise.
         self.p_circuit.pd_array.run_seed = int(config['seed'] if seed is None else seed)
         shape = (len(t), len(self.p_circuit.mod_element.keys()))
@@ -896,7 +907,7 @@ class Circuit(object):
 
         def step(current_param_p: torch.Tensor) -> torch.Tensor:
             s1 = time.time()
-            param_e, result_middle_p, power_p = self.p_circuit.simulate(t, current_param_p)
+            param_e, result_middle_p, power_p = self.p_circuit.simulate(t, current_param_p, mode=mode)
             s2 = time.time()
             new_param_p, result_middle_e, power_e = self.e_circuit.simulate(t, param_e)
             s3 = time.time()
@@ -1020,20 +1031,15 @@ class Circuit(object):
         every example SPIPE ships -- the distinction only affects probes downstream of a
         detector, never the modulator drive.
 
-        :param mode: photonic propagation mode.  ``'envelope'`` is rejected: that path
-            integrates an impulse response with no backward, so a gradient taken through it
-            would silently be the quasi-static one.
+        :param mode: photonic propagation mode, ``'quasistatic'`` or ``'envelope'``. The
+            envelope recursion is differentiated by autograd, so the loop derivative includes
+            the optical memory.
         :raises CouplingJacobianError: the coupled fixed point is not differentiable, i.e. the
             feedback loop gain is at or above one.  See that exception.
         :raises NotImplementedError: the electronic back end cannot supply the gradients this
             needs (HSPICE cannot differentiate with respect to the photocurrent).
         """
-        if mode != 'quasistatic':
-            raise ValueError(
-                f"differentiable_simulate(mode={mode!r}) is not available: the envelope "
-                f"propagation mode (spipe.photonic.envelope) has no backward pass, so a "
-                f"gradient taken through it would silently be the quasi-static gradient of a "
-                f"different simulation. Use mode='quasistatic'.")
+        _check_mode(mode)
 
         t = self.time if t is None else t
         if not self.e_circuit.sens_declared:
@@ -1044,7 +1050,7 @@ class Circuit(object):
                 "'.sensparam M1:W'.", RuntimeWarning, stacklevel=2)
 
         # 1. the ordinary, gradient-free fixed point.
-        self.gradient_free_simulate(t, seed=seed, x0=x0)
+        self.gradient_free_simulate(t, seed=seed, x0=x0, mode=mode)
         v_star = self.fixed_point_info['x'].detach()
 
         electronic, photonic = self.e_circuit, self.p_circuit

@@ -8,7 +8,7 @@ Note the sky130 DAC is deliberately NOT used: sky130 ships 63 per-size binned BS
 (lmin=1.45e-7..1.55e-7, wmin=1.255e-6..1.265e-6), so W is effectively discrete there and
 d/dW is ill-posed. Level-1 devices make W continuous and analytically differentiable.
 """
-import sys, os, math
+import sys, os, math, warnings
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from harness import TB, fresh_spipe, main, REPO
 import numpy as np
@@ -410,6 +410,45 @@ def build():
               f'same realisation: analytic {float(w.grad):.8g} vs central FD {fd:.8g}')
     except Exception as e:
         tb.ok('E3.noise_gradient_finite', False, f"{e!r}")
+
+    # ------------------------------------------------------------------
+    # Circuit in envelope mode. simulate(mode='envelope') used to be dropped silently on the
+    # plain path (and any string was accepted), and refused on the gradient path. A 100 ps
+    # delay line sits after the modulator, so the loop derivative has to carry the delay.
+    # ------------------------------------------------------------------
+    try:
+        import tempfile
+        from spipe.core.core import Circuit
+        deck = (".electronic\n.model nch NMOS (LEVEL=1 VTO=0.7  KP=120u LAMBDA=0.02)\n"
+                ".model pch PMOS (LEVEL=1 VTO=-0.7 KP=40u  LAMBDA=0.02)\nVdd vdd 0 3.0\n"
+                "Vin g   0 PULSE(0 3 0.2n 0.02n 0.02n 1n 2n)\n"
+                "MN1 vdrv g 0   0   nch W=8u  L=0.5u\nMP1 vdrv g vdd vdd pch W=16u L=0.5u\n"
+                "Rload1 vo1 0 1k\n.sensparam MN1:W\n.tran 0 1.6n 81\n.photonic\n"
+                ".mode neff=2.35 ng=4.0 wl=1550e-9\n.freq 193.0e12 193.2e12 201\n"
+                ".source 0.0316@a1 0.0@a2\nmzm0 a1 a2 b1 b2 vdrv level3 vpi=2.0 act_l=1e-9\n"
+                "wg0 b1 c1 l=7.49e-3\npd1 c1 vo1 level1 r0=1.0\n")
+        env_deck = os.path.join(tempfile.mkdtemp(prefix='spipe_tb12_'), 'delay.sp')
+        open(env_deck, 'w').write(deck)
+        tb.raises('E4.circuit_rejects_unknown_mode',
+                  lambda: Circuit(env_deck, 'native').simulate(mode='nonsense'), ValueError)
+
+        def _env(width=None, grad=False):
+            c = Circuit(env_deck, 'native'); w = c.param('mn1', 'W')
+            if width is not None:
+                w.data.fill_(width)
+            with (torch.enable_grad() if grad else torch.no_grad()), warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                pc = c.simulate(mode='envelope')[2]
+                return (pc[:, 0] * torch.linspace(0, 1, pc.shape[0], dtype=torch.float64)).sum(), w
+
+        loss, w = _env(grad=True); loss.backward()
+        w0 = float(w.detach()); h = 1e-4 * w0
+        fd = (float(_env(w0 + h)[0]) - float(_env(w0 - h)[0])) / (2 * h)
+        tb.lt('E4.circuit_envelope_grad_vs_fd', abs(float(w.grad) - fd) / abs(fd), 1e-6,
+              f'Circuit.simulate(mode="envelope"), 100 ps delay after the modulator: analytic '
+              f'{float(w.grad):.8g} vs central FD {fd:.8g}')
+    except Exception as e:
+        tb.ok('E4.circuit_envelope_grad_vs_fd', False, f"{e!r}")
 
     # ------------------------------------------------------------------
     # Like for like: the unified call must BE the composition. Same netlist, same

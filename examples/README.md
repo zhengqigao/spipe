@@ -19,6 +19,7 @@ iteration properly, and one of them deliberately has no answer at all.
 | example | what it is | what it shows |
 |---|---|---|
 | `mesh_vs_lumerical.py` | a programmable mesh checked against Lumerical INTERCONNECT | loops solved exactly; agreement to the limit of INTERCONNECT's output precision |
+| `envelope_delay_ring.py` | a delay line and a ring resonator, switched on in time | `mode='envelope'`: the 100 ps delay and the 163 ps photon lifetime, both against analytic values |
 | `oeo_electronic.py` | optoelectronic oscillator, frequency set by an electronic band-pass | loop gain > 1; the solver has to converge on a limit cycle |
 | `bistable_latch.py` | electro-optic latch with positive feedback | **two** stable fixed points; the answer depends on the initial guess |
 | `bias_control.py` | integrating bias-control loop | negative feedback; setpoint checkable in closed form |
@@ -56,6 +57,7 @@ python examples/oeo_electronic.py --plot
 python examples/bistable_latch.py
 python examples/bias_control.py
 python examples/oeo_optical_delay.py
+python examples/envelope_delay_ring.py
 python examples/derived/n1_dac.py
 python examples/derived/n1_dac.py --calibrate   # re-fit cload to the sky130 settling time
 python examples/derived/n1_dac.py --native      # same transfer on spipe.electronic.native

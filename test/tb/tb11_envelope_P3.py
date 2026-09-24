@@ -311,6 +311,62 @@ def build():
           f"a high-Q ring whose envelope settles 0.9% off the steady state must be flagged: "
           f"{(_msgs[0][:90] if _msgs else repr(_raised)[:90])!r}")
 
+    # ---- a constant drive still has a delayed gradient -------------------------------
+    # A constant drive used to be folded into the static system and the run handed to the
+    # quasi-static adjoint: d pd[50]/d drive[50] = 315 where the true sensitivity sits on
+    # drive[40], 100 ps (the delay line) earlier. Values were right; the gradient was not causal.
+    try:
+        from spipe.photonic.photonic import Photonic as _PhC
+        _c = 299792458.0; _dt = 10e-12; _N = 81
+        _net = [x + "\n" for x in [".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 192.9e12 193.3e12 401",
+                ".source 1.0@a1 0.0@a2", "mzm0 a1 a2 b1 b2 vdrv level1 vpi=2.0 act_l=1e-9",
+                f"wg0 b1 c1 l={100e-12 * _c / 4.0!r}", "pd1 c1 vo1 level1 r0=1.0"]]
+        _t = torch.arange(_N, dtype=torch.float64) * _dt
+        _ph = _PhC(_net)
+        _d0 = torch.full((_N, 1), 1.0, dtype=torch.float64)
+        _d = _d0.clone().requires_grad_(True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _ph.simulate(_t, _d, mode='envelope')[0][50, 0].backward()
+
+            def _fd(n, h=1e-5):
+                dp, dm = _d0.clone(), _d0.clone(); dp[n, 0] += h; dm[n, 0] -= h
+                with torch.no_grad():
+                    return float(_ph.simulate(_t, dp, mode='envelope')[0][50, 0]
+                                 - _ph.simulate(_t, dm, mode='envelope')[0][50, 0]) / (2 * h)
+            _fd40, _fd50 = _fd(40), _fd(50)
+        tb.close('P3.const_drive_grad_is_delayed', float(_d.grad[40, 0]), _fd40, 1e-6,
+                 detail=f'd pd[50]/d drive[40] (100 ps earlier) vs FD {_fd40:.6g}')
+        tb.lt('P3.const_drive_grad_not_instant', abs(float(_d.grad[50, 0])), 1e-6 * abs(_fd40),
+              f'd pd[50]/d drive[50] = {float(_d.grad[50, 0]):.3g}; FD {_fd50:.3g} (light is still in flight)')
+    except Exception as _e:
+        tb.ok('P3.const_drive_grad_is_delayed', False, repr(_e))
+
+    # ---- the quasi-static guard sees a ring that 0 V hides --------------------------------
+    # With the modulator steering all light to the other output at zero drive, the ring path
+    # carried 1e-30 of the power and was skipped: no warning at dt = 200 ps against a ~380 ps
+    # group delay. The guard now also measures at the drive the run actually uses.
+    try:
+        _c = 299792458.0
+        _neff, _ng, _f0 = 2.35, 4.0, 193.1e12
+        _lam = _c / _f0; _m = round(10e-12 * _c / _ng / (_lam / _neff)); _L = _m * _lam / _neff
+        _ring = [x + "\n" for x in [f".mode neff={_neff} ng={_ng} wl=1550e-9",
+                 f".freq {_f0 - 50e9} {_f0 + 50e9} 201", ".source 1.0@a1 0.0@a2",
+                 "mzm0 a1 a2 b1 x2 vdrv level1 vpi=2.0 act_l=1e-9",
+                 f"mzi0 b1 r2 o1 r1 theta={math.acos(0.95)!r}", f"wg0 r1 r2 l={_L!r} alpha=0.99",
+                 "pd1 o1 vo1 level1 r0=1.0", "pd2 x2 vo2 level1 r0=1.0"]]
+        from spipe.photonic.photonic import Photonic as _PhR
+        sp.config['quasistatic_check'] = True            # an earlier section switched it off
+        with warnings.catch_warnings(record=True) as _w:
+            warnings.simplefilter("always")
+            _PhR(_ring).simulate(torch.arange(10, dtype=torch.float64) * 200e-12,
+                                 torch.full((10, 1), 2.0, dtype=torch.float64))
+        tb.ok('P3.quasistatic_guard_sees_hidden_ring',
+              any('Quasi-static' in str(x.message) for x in _w),
+              'ring behind a modulator that is off at 0 V, run at 2 V with dt = 200 ps')
+    except Exception as _e:
+        tb.ok('P3.quasistatic_guard_sees_hidden_ring', False, repr(_e))
+
     return tb
 
 

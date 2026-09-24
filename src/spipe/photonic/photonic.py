@@ -689,50 +689,68 @@ class Photonic(object):
         self._max_group_delay = _longest_simple_path(adjacency) if adjacency else 0.0
         return self._max_group_delay
 
-    def carrier_group_delay(self) -> float:
+    def carrier_group_delay(self, drive: Optional[torch.Tensor] = None) -> float:
         """The largest group delay ``|d phase / d omega|`` from the sources to the detectors,
         measured at the simulated carriers.
 
         Two steady-state solves a hair apart in frequency (a relative step of 1e-9, far finer
         than any resonance) give the phase slope of every source-to-detector transfer at every
         carrier. Unlike :meth:`max_group_delay`, which adds up path lengths, this sees a
-        resonator: near resonance a ring's group delay is set by its photon lifetime. Carriers
-        carrying less than 1e-6 of the strongest transfer are skipped, where the phase is
-        meaningless. Modulators are held at zero drive. Returns 0 if there are no detectors.
+        resonator: near resonance a ring's group delay is set by its photon lifetime.
+
+        The circuit is measured with the modulators at zero drive and, when ``drive`` (the
+        ``(T, modulators)`` drive of the run) is given, also at its two extreme samples: a
+        modulator switched off at 0 V can steer all the light away from a resonator, which then
+        looked delay-free. In each state, transfers carrying less than 1e-6 of that state's
+        strongest are skipped (their phase is meaningless), and a state whose light is below
+        1e-12 of the brightest state's is skipped altogether. Returns 0 without detectors.
         """
-        if self._carrier_group_delay is not None:
+        if drive is None and self._carrier_group_delay is not None:
             return self._carrier_group_delay
         if not self.dout_node or self.omega is None:
-            self._carrier_group_delay = 0.0
             return 0.0
+        num_mod = len(self.occur_order)
+        states = [torch.zeros(1, num_mod, dtype=config['real_dtype'], device=config['device'])]
+        if drive is not None and num_mod and drive.numel():
+            d = drive.detach().to(dtype=config['real_dtype'], device=config['device'])
+            total = d.sum(dim=-1)
+            for k in {int(total.argmin()), int(total.argmax())}:
+                states.append(d[k:k + 1])
         t1 = torch.zeros(1, dtype=config['real_dtype'], device=config['device'])
-        p1 = torch.zeros(1, len(self.occur_order), dtype=config['real_dtype'],
-                         device=config['device'])
         args = (self.node_has_ele, self.srce_node, self.node2ind, self.circuit_element,
                 self.mod_element, self.mode_info, self.occur_order,
                 (self.dout_node, []), self.inward_node, self.outward_node, False)
         rel = 1e-9
+        measured = []
         with torch.no_grad(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            try:
-                base, _ = Simulate.apply(t1, p1, self.omega, *args)
-                bumped, _ = Simulate.apply(t1, p1, self.omega * (1.0 + rel), *args)
-            except Exception:
-                self._carrier_group_delay = 0.0          # an estimate must never break a run
-                return 0.0
-        base, bumped = base[0], bumped[0]                            # (F, detectors)
-        power = base.abs() ** 2
-        keep = power > 1e-6 * float(power.max()) if float(power.max()) > 0 else power > 0
-        if not bool(keep.any()):
-            self._carrier_group_delay = 0.0
+            for state in states:
+                try:
+                    base, _ = Simulate.apply(t1, state, self.omega, *args)
+                    bumped, _ = Simulate.apply(t1, state, self.omega * (1.0 + rel), *args)
+                except Exception:
+                    continue                             # an estimate must never break a run
+                measured.append((base[0], bumped[0]))    # (F, detectors) each
+        if not measured:
             return 0.0
-        dphase = torch.angle(bumped[keep] / base[keep])
-        # The grid may sit on the CPU while the solve ran on a GPU; put it where the result is.
-        domega = (self.omega.to(base.device) * rel).unsqueeze(-1).expand_as(base)[keep]
-        self._carrier_group_delay = float((dphase / domega).abs().max())
-        return self._carrier_group_delay
+        brightest = max(float((b.abs() ** 2).max()) for b, _ in measured)
+        tau = 0.0
+        for base, bumped in measured:
+            power = base.abs() ** 2
+            peak = float(power.max())
+            if peak <= 1e-12 * brightest or peak == 0.0:
+                continue
+            keep = power > 1e-6 * peak
+            dphase = torch.angle(bumped[keep] / base[keep])
+            # The grid may sit on the CPU while the solve ran on a GPU; put it where the result is.
+            domega = (self.omega.to(base.device) * rel).unsqueeze(-1).expand_as(base)[keep]
+            tau = max(tau, float((dphase / domega).abs().max()))
+        if drive is None:
+            self._carrier_group_delay = tau
+        return tau
 
-    def check_quasistatic(self, dt: float) -> Optional[float]:
+    def check_quasistatic(self, dt: float, drive: Optional[torch.Tensor] = None,
+                          final: bool = True) -> Optional[float]:
         """Warn if the steady-state (quasi-static) photonic solve is no longer justified.
 
         SPIPE solves the photonic network in steady state at every time sample, i.e. it assumes
@@ -747,7 +765,10 @@ class Photonic(object):
         :param dt: the transient time step, in seconds.
         :return: the estimated maximum group delay, or ``None`` if the check was skipped.
         """
-        self._quasistatic_checked = True
+        # final=False: a provisional check (at construction, before any drive exists); the first
+        # simulate() still runs the check with the real drive. A warning is given only once.
+        if final:
+            self._quasistatic_checked = True
 
         if not config.get('quasistatic_check', True):
             return None
@@ -764,10 +785,11 @@ class Photonic(object):
         # group delay at the simulated carriers (sees resonators: a ring's photon lifetime is its
         # round trip times its finesse, which no path length shows -- 1.8 ps vs 279 ps on a
         # high-Q ring, and the check used to stay silent).
-        path_tau, carrier_tau = self.max_group_delay(), self.carrier_group_delay()
+        path_tau, carrier_tau = self.max_group_delay(), self.carrier_group_delay(drive)
         tau = max(path_tau, carrier_tau)
 
-        if tau > 0.1 * dt:
+        if tau > 0.1 * dt and not getattr(self, '_quasistatic_warned', False):
+            self._quasistatic_warned = True
             if path_tau >= carrier_tau:
                 top = sorted(getattr(self, '_device_delays', {}).items(),
                              key=lambda kv: -kv[1][0])[:3]
@@ -889,7 +911,7 @@ class Photonic(object):
                 raise RuntimeError(f"Expected param_value of shape {expected_shape}, but got {param_value.shape}")
 
             if not self._quasistatic_checked and len(t_value) > 1 and mode == 'quasistatic':
-                self.check_quasistatic(float(t_value[1] - t_value[0]))
+                self.check_quasistatic(float(t_value[1] - t_value[0]), param_value)
 
         if mode == 'envelope':
             if torch.is_grad_enabled() and any(v.requires_grad for v in self._trainable.values()):

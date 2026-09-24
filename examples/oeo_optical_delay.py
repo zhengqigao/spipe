@@ -29,9 +29,9 @@ What to use instead
 -------------------
 ``mode='envelope'``: an envelope (slowly-varying-amplitude) formulation, in which each optical
 path carries its own group delay and the photonic network becomes a delay system rather than a
-memoryless one.  That mode is being added to SPIPE separately; it is what this circuit needs.
-This example is written so that it becomes the *correct* netlist for that mode without change --
-only the solver underneath it has to be different.
+memoryless one.  ``Circuit.simulate(mode='envelope')`` provides it (docs/envelope.md).  For a
+15.7 ns loop it needs a very fine and wide ``.freq`` grid -- the script prints the size -- and
+this example does not attempt that run: it stops at the diagnosis.
 
 Run it::
 
@@ -157,8 +157,8 @@ def main() -> int:
 
     print('\n  -- REFUSAL -------------------------------------------------------------------')
     refusal = (
-        "SPIPE cannot simulate an optical-delay optoelectronic oscillator, and will not "
-        "pretend to.\n"
+        "SPIPE's default (quasi-static) mode cannot simulate an optical-delay optoelectronic "
+        "oscillator, and will not pretend to.\n"
         "      The oscillation frequency of this circuit is set by the OPTICAL loop delay "
         f"({expected * 1e9:.3f} ns\n"
         f"      here, a mode spacing of {1.0 / expected / 1e6:.3f} MHz).  Under the "
@@ -172,11 +172,13 @@ def main() -> int:
         "      structurally absent from the model, and any oscillation SPIPE reported for this "
         "netlist\n"
         "      would be a property of the electronics alone.\n"
-        "      Use mode='envelope' instead: the envelope (slowly-varying-amplitude) "
-        "formulation gives\n"
-        "      every optical path its own group delay, which is exactly what this circuit "
-        "needs.  The\n"
-        "      netlist above is already the right netlist for that mode.")
+        "      mode='envelope' gives every optical path its own group delay, which is what "
+        "this circuit needs,\n"
+        "      and Circuit.simulate(mode='envelope') runs it (docs/envelope.md). Here that needs "
+        f"a .freq grid with\n      df <= 1/(10 tau) = {1.0 / (10 * expected) / 1e6:.2f} MHz "
+        f"over a band of a few times 1/dt = {1.0 / dt / 1e9:.0f} GHz: about "
+        f"{int(3.0 / dt * 10 * expected):,} points.\n"
+        "      This example stops at the diagnosis and does not attempt that run.")
     print(f"      {refusal}")
     print('\n      No simulation was run.  No oscillation frequency is reported.')
     return 0

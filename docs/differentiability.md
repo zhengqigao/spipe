@@ -148,7 +148,8 @@ To set a parameter by hand, use `theta.data.fill_(0.7)` with a Python float. Cop
 default `torch.tensor(0.7)` passes through float32 and loses about 1e-8.
 
 Two things are not supported yet:
-- `mode='envelope'`, which raises an error;
+- `Photonic.param` in `mode='envelope'`, which raises an error (the drive *is* differentiable
+  there);
 - a `Photonic.param` inside a `Circuit`, which also raises an error. The derivative through
   the electronic–photonic loop is not implemented for photonic parameters; `.sensparam`
   electronic parameters are the ones that work there.

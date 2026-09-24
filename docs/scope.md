@@ -61,9 +61,11 @@ modulator changes"*.
 Envelope mode requires a `.freq` grid wide enough (`band ≫ 1/dt`) and fine enough
 (`1/(2·df) ≫ τ_max`); it warns with concrete numbers when either is violated.
 It is differentiable with respect to the **modulator drive**: `backward()` through an
-envelope-mode result fills in `drive.grad`, matching finite differences to `4e-09`. It is
-not yet differentiable with respect to *passive* device parameters (a waveguide length,
-a coupler angle) — use `mode='quasistatic'` for those.
+envelope-mode result fills in `drive.grad`, matching finite differences to `4e-09`. It also works
+inside a `Circuit` (`simulate(mode='envelope')`), including gradients with respect to
+`.sensparam` parameters. It is not yet differentiable with respect to *passive* device
+parameters (a waveguide length, a coupler angle); use `mode='quasistatic'` for those. How to
+size the grid, which carrier to read, and the settings are in [envelope.md](envelope.md).
 
 ### A known limitation: modulators inside optical loops
 
