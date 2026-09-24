@@ -76,7 +76,7 @@ def init_coeff(pd_args: List[Dict], eval_omega) -> torch.Tensor:
         if 'wl' not in pd_args[i].keys():
             if 'r0' not in pd_args[i].keys():
                 raise RuntimeError(
-                    f"photodetector {i + 1} has no responsivity: give r0= in A/W (and r1=, r2=, ... "
+                    f"photodetector {i + 1} has no responsivity: give r0= in A per unit |A|^2, i.e. A/W if a unit is 1 W (and r1=, r2=, ... "
                     f"with wl= for a wavelength dependence)")
             else:
                 coeff[:, i] = pd_args[i]['r0']
@@ -87,9 +87,9 @@ def init_coeff(pd_args: List[Dict], eval_omega) -> torch.Tensor:
         bad = sorted({int(j) + 1 for j in torch.nonzero(coeff < 0)[:, 1].tolist()})
         warnings.warn(
             f"photodetector(s) {bad}: the responsivity r0 + r1*(omega - omega0) + ... is negative "
-            f"at some simulated frequency (min {float(coeff.min()):.3g} A/W), which gives a "
+            f"at some simulated frequency (min {float(coeff.min()):.3g} A per unit), which gives a "
             f"negative photocurrent. r1, r2, ... are per (rad/s)^k of angular frequency, "
-            f"so they are tiny numbers (r1 ~ 1e-16 A/W per rad/s is already a steep slope).",
+            f"so they are tiny numbers (r1 ~ 1e-16 per rad/s against r0 ~ 1 is already a steep slope).",
             RuntimeWarning, stacklevel=3)
     return coeff
 
@@ -136,7 +136,7 @@ class PDArray(nn.Module):
     Parameters
     ----------
     ``r0, r1, ... , wl``
-        Taylor coefficients of the responsivity ``R(omega)`` about ``2*pi*c/wl`` [A/W].  Unchanged.
+        Taylor coefficients of the responsivity ``R(omega)`` about ``2*pi*c/wl`` [A per unit |A|^2; A/W if a unit is 1 W].  Unchanged.
     ``bw``
         Detector / front-end bandwidth [Hz]: the 3 dB frequency of a single-pole low-pass.  The
         photocurrent passes through it, and so does the noise (see *Noise* below).  With ``bw``

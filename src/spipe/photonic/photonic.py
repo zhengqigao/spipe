@@ -530,17 +530,17 @@ def _check_pd_args(name: str, kv: Dict) -> None:
         close = difflib.get_close_matches(key, list(_PD_KEYS) + ['r0'], n=1)
         raise ValueError(f"photodetector {name}: unknown parameter '{key}='"
                          + (f" (did you mean '{close[0]}='?)" if close else "")
-                         + f". A pd line takes r0= (responsivity, A/W) and optionally "
+                         + f". A pd line takes r0= (responsivity, A per unit |A|^2) and optionally "
                            f"{', '.join(k + '=' for k in _PD_KEYS)}.")
     if 'r0' not in kv:
-        raise ValueError(f"photodetector {name}: give its responsivity r0= in A/W "
+        raise ValueError(f"photodetector {name}: give its responsivity r0= in A per unit |A|^2 "
                          f"(r1=, r2=, ... with wl= add a frequency dependence).")
     higher = sorted(k for k in kv if re.fullmatch(r'r[1-9]\d*', k))
     if higher and 'wl' not in kv:
         raise ValueError(f"photodetector {name}: {', '.join(k + '=' for k in higher)} "
                          f"{'is' if len(higher) == 1 else 'are'} a Taylor series about the "
                          f"angular frequency 2*pi*c/wl, so it needs wl= (it used to be ignored).")
-    rules = {'r0': (lambda v: v >= 0, 'must be >= 0 (A/W)'),
+    rules = {'r0': (lambda v: v >= 0, 'must be >= 0'),
              'bw': (lambda v: v >= 0, 'must be > 0 in Hz (leave it out for an ideal detector)'),
              'idark': (lambda v: v >= 0, 'must be >= 0 (A)'),
              'temp': (lambda v: v > 0, 'must be > 0 (K)'),

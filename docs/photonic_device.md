@@ -44,9 +44,13 @@ units and the `.electronic` section.
 ### Fields and power
 
 Each port carries a complex **field amplitude** `A` at each optical frequency of the `.freq`
-grid. Its power is `|A|²`. Without a power budget on the `.source` line, `|A|²` is in watts:
-`.source 1.0@a1` launches 1 W, and `.source 0.0316@a1` about 1 mW. With `power=`/`eff=`, one
-unit of `|A|²` is `power·eff` watts ([The power budget](netlist.md#the-power-budget)).
+grid. Its power is `|A|²`, counted in **source units**. Without a power budget on the
+`.source` line, a unit is whatever you decide: `.source 1.0@a1` launches one unit, and SPIPE
+never needs to know whether that is 1 W or 1 mW. The choice shows up in one place only, the
+detector, which turns one unit into `r0` amperes. Reading `r0` as A/W means you took the unit to
+be 1 W. With `power=`/`eff=` the unit is fixed: one unit of `|A|²` is `power·eff` watts
+([The power budget](netlist.md#the-power-budget)). The examples below launch one unit and
+quote output powers in units.
 
 A device's response is written below as `b = M · a`: `a` holds the fields entering the input
 ports, `b` those leaving the output ports, and `M[row, col]` maps input `col` to output `row`.
@@ -117,7 +121,7 @@ b1 = α · exp(j·β(ω)·l) · a1
 The phase `β·l` also sets the delay. A waveguide of group index `ng` delays light by
 `ng·l/c`, which is how rings and delay lines get their frequency response.
 
-**Example.** `.mode neff=2.35 ng=4.0 wl=1550nm`, `.freq 193.1THz`, 1 W into `a1`, and
+**Example.** `.mode neff=2.35 ng=4.0 wl=1550nm`, `.freq 193.1THz`, 1 unit into `a1`, and
 `wg0 a1 b1 l=10um alpha=0.9`:
 
 ```
@@ -125,7 +129,7 @@ The phase `β·l` also sets the delay. A waveguide of group index `ng` delays li
 n   = 4.0 + (2.35 − 4.0) · 1552.524 / 1550 = 2.347313
 β   = 2π·f · n / c       = 9.499755e6 rad/m
 β·l = 94.99755 rad       ≡ 0.749769 rad  (mod 2π)
-b1  = 0.9 · exp(j·0.749769) = 0.658662 + 0.613323j      |b1|² = 0.81 W
+b1  = 0.9 · exp(j·0.749769) = 0.658662 + 0.613323j      |b1|² = 0.81
 ```
 
 ---
@@ -149,7 +153,7 @@ b1 = exp(j·ps) · a1
 The phase is the same at every frequency. `ps` has no length, loss or delay. To tune a phase
 with a voltage, use [`modp`](#modp-phase-modulator).
 
-**Example.** `ps0 a1 b1 ps=0.5pi` with 1 W into `a1` gives `b1 = j` (= `exp(jπ/2)`), still 1 W.
+**Example.** `ps0 a1 b1 ps=0.5pi` with 1 unit into `a1` gives `b1 = j` (= `exp(jπ/2)`), still 1 unit.
 
 ---
 
@@ -182,11 +186,11 @@ b2 = α·e^{jβl} · ( j·sin θ · a1 + cos θ · a2 )
 
 With `l = 0` the factor `α·e^{jβl}` is 1.
 
-**Example.** `mzi0 a1 a2 b1 b2 theta=0.3176` with 1 W into `a1`:
+**Example.** `mzi0 a1 a2 b1 b2 theta=0.3176` with 1 unit into `a1`:
 
 ```
-b1 = cos 0.3176   = 0.949988        |b1|² = 0.902477 W  (through)
-b2 = j·sin 0.3176 = 0.312287j       |b2|² = 0.097523 W  (cross)
+b1 = cos 0.3176   = 0.949988        |b1|² = 0.902477  (through)
+b2 = j·sin 0.3176 = 0.312287j       |b2|² = 0.097523  (cross)
 ```
 
 ---
@@ -229,11 +233,11 @@ Only the difference `theta − phi` sets the split: `0` sends everything across 
 `π` everything straight through (`a1 → b1`). The common phase `(theta + phi)/2` moves the
 phase of both outputs together.
 
-**Example.** `pbum0 a1 a2 b1 b2 theta=0.5pi phi=0 l=0` with 1 W into `a1`:
+**Example.** `pbum0 a1 a2 b1 b2 theta=0.5pi phi=0 l=0` with 1 unit into `a1`:
 
 ```
-b1 = ½ · (j − 1)    = −0.5 + 0.5j      |b1|² = 0.5 W
-b2 = ½j · (j + 1)   = −0.5 + 0.5j      |b2|² = 0.5 W
+b1 = ½ · (j − 1)    = −0.5 + 0.5j      |b1|² = 0.5
+b2 = ½j · (j + 1)   = −0.5 + 0.5j      |b2|² = 0.5
 ```
 
 ---
@@ -257,11 +261,11 @@ from reciprocity: light entering output `i` reaches `a1` with amplitude `1/√N`
 of its power arrives, as in a real Y-junction combiner, where the rest is radiated.
 `splitter1to1` is a straight connection.
 
-**Example.** `splitter1to3 a1 b1 b2 b3` with 2 mW into `a1` (`.source 0.0447214@a1`,
-`0.0447214² = 2e-3`):
+**Example.** `splitter1to3 a1 b1 b2 b3` with 2e-3 units into `a1` (`.source 0.0447214@a1`,
+`0.0447214² = 2e-3`; 2 mW if a unit is 1 W):
 
 ```
-b_i = 0.0447214 / √3 = 0.0258199        |b_i|² = 0.666667 mW   on each of b1, b2, b3
+b_i = 0.0447214 / √3 = 0.0258199        |b_i|² = 6.66667e-4      on each of b1, b2, b3
 ```
 
 ---
@@ -285,8 +289,8 @@ The `k`-th point of the `.freq` grid leaves by output `k`, with
 no loss. The routing is by the channel's **position in the grid**, not by a passband: the
 filter shape is ideal and does not depend on the actual frequency values.
 
-**Example.** `.freq 193.1THz 193.2THz 2`, `.source 1.0@a1` (1 W in each channel) and
-`wdm1to2 a1 b1 b2`: `b1` carries 1 W at 193.1 THz and nothing at 193.2 THz, and `b2` the
+**Example.** `.freq 193.1THz 193.2THz 2`, `.source 1.0@a1` (1 unit in each channel) and
+`wdm1to2 a1 b1 b2`: `b1` carries 1 unit at 193.1 THz and nothing at 193.2 THz, and `b2` the
 reverse. A `pd` on each output reads 1 A (with `r0=1`), because the detector sums over the
 grid.
 
@@ -372,7 +376,7 @@ a2 = base · (1 − ε)/(1 + ε)   · exp(−½ · act_l · Δα_2)
   **Passivity caveat:** with a positive `dacoeff1`, the arm driven negative gets
   `Δα_i < 0` and its amplitude rises *above* its value at bias. With `il = 0` that amplitude
   exceeds 1 and the modulator creates light. For example `dacoeff1=100` at `V = 2` gives
-  `a2 = e^{+0.05} = 1.0513` and 1.005 W out for 1 W in. SPIPE does not check this, so keep
+  `a2 = e^{+0.05} = 1.0513` and 1.005 units out for 1 unit in. SPIPE does not check this, so keep
   `il` large enough to cover it: `il ≥ 4.343 · act_l · max(−Δα_i)` dB over the drive range
   you use (0.43 dB in this example).
 
@@ -404,8 +408,8 @@ At `V = vbias` all the light leaves by `b2`. At `V = vbias + vpi` it all leaves 
 Δφ   = π · (1.5 − 0.5) / 2 = π/2          φ1 = +π/4, φ2 = −π/4
 base = 10^(−3/20) = 0.707946              ε = 10^(−20/20) = 0.1
 a1   = 0.707946                           a2 = 0.707946 · 0.9/1.1 = 0.579228
-b1   = ½·(A1 − A2) = 0.0455085 + 0.455085j        |b1|² = 0.209173 W
-b2   = ½j·(A1 + A2) = −0.0455085 + 0.455085j      |b2|² = 0.209173 W
+b1   = ½·(A1 − A2) = 0.0455085 + 0.455085j        |b1|² = 0.209173
+b2   = ½j·(A1 + A2) = −0.0455085 + 0.455085j      |b2|² = 0.209173
 ```
 
 This is quadrature, so both outputs are equal. The peak transmission is
@@ -455,14 +459,14 @@ own, only the modulation `φ`. With no passive sections and light into `a1`,
 `|b1|² = cos²φ` and `|b2|² = sin²φ`. The light swaps outputs completely when
 `φ = π/2`.
 
-**Example.** `.mode neff=2.35`, `.freq 193.1THz`, 1 W into `a1`,
+**Example.** `.mode neff=2.35`, `.freq 193.1THz`, 1 unit into `a1`,
 `modm0 a1 a2 b1 b2 v level1 coeff1=1e-3 act_l=200um`, driven at `V = 0.5 V`:
 
 ```
 β  = 2π·193.1e12 · 2.35 / c = 9.510630e6 rad/m
 φ  = β · 200e-6 · 1e-3 · 0.5 = 0.951063 rad  (0.302733 π)
-b1 = cos φ   = 0.580818           |b1|² = 0.337350 W
-b2 = j·sin φ = 0.814033j          |b2|² = 0.662650 W
+b1 = cos φ   = 0.580818           |b1|² = 0.337350
+b2 = j·sin φ = 0.814033j          |b2|² = 0.662650
 ```
 
 Full cross-over (`φ = π/2`) needs `V = 0.825811 V`.
@@ -495,13 +499,13 @@ The modulator changes only the phase, so the power is unchanged, apart from `α�
 `wg_l ≠ 0`. As in `modm`, `act_l` adds only the modulation phase. The propagation phase
 `β·act_l` is left out, and `wg_l` adds it back if you need it.
 
-**Example.** `.mode neff=2.35`, `.freq 193.1THz`, 1 W into `a1`,
+**Example.** `.mode neff=2.35`, `.freq 193.1THz`, 1 unit into `a1`,
 `modp0 a1 b1 v level1 coeff1=1e-3 act_l=200um wg_l=5um alpha=0.95`, driven at `V = 1 V`:
 
 ```
 φ       = 9.510630e6 · 200e-6 · 1e-3 · 1 = 1.902126 rad  (0.605466 π)
 β·wg_l  = 47.553152 rad
-b1      = 0.95 · exp(j·(1.902126 + 47.553152)) = 0.654883 − 0.688207j     |b1|² = 0.9025 W
+b1      = 0.95 · exp(j·(1.902126 + 47.553152)) = 0.654883 − 0.688207j     |b1|² = 0.9025
 ```
 
 ---
@@ -515,14 +519,14 @@ absorbs the light, so it must sit on an **output**, a node with just one device.
 field inside a circuit without disturbing it, use `.prob`.
 
 ```
-pd<name> <optical node> <electrical node> <level> r0=<A/W> [r1= r2= ... wl=]
+pd<name> <optical node> <electrical node> <level> r0=<A per unit> [r1= r2= ... wl=]
          [bw=<Hz> idark=<A> noise=<0|1> temp=<K> rload=<Ω> inoise=<A/√Hz> coherent=<0|1> dt=<s>]
 ```
 
 | parameter | default | unit | meaning |
 |---|---|---|---|
-| `r0` | **required** | A/W | responsivity, per unit `|A|²` |
-| `r1`, `r2`, … | 0 | A/W per (rad/s)^k | slope, curvature, … of the responsivity with frequency |
+| `r0` | **required** | A per unit `|A|²` | responsivity (A/W if a unit is 1 W) |
+| `r1`, `r2`, … | 0 | `r0`'s unit per (rad/s)^k | slope, curvature, … of the responsivity with frequency |
 | `wl` | — | m | reference wavelength of `r1`, `r2`, …; needed with them |
 | `bw` | none (infinite) | Hz | 3 dB bandwidth of a single-pole response; also switches on the noise |
 | `idark` | 0 | A | dark current |
@@ -539,9 +543,9 @@ R(ω) = r0 + r1·(ω − ω0) + r2·(ω − ω0)² + …        ω0 = 2πc / wl
 ```
 
 `R` is a Taylor series in **angular** frequency about `ω0`, so `r1` is tiny: 1e-16 A/W per
-rad/s is already a steep slope. Without `wl`, `R = r0` at every frequency. A negative `R` at a
-simulated frequency gives a warning. `r0` is per unit `|A|²`, which is amperes per watt
-unless the `.source` line sets a power budget.
+rad/s (with a unit of 1 W) is already a steep slope. Without `wl`, `R = r0` at every frequency. A negative `R` at a
+simulated frequency gives a warning. `r0` is in amperes per unit of `|A|²`: A/W if you take a unit as 1 W, or amperes per
+`power·eff` watts when the `.source` line sets a power budget.
 
 ### Photocurrent
 
@@ -594,8 +598,8 @@ seeded from `config['seed']`, so a run is reproducible. The electronic side adds
 its own. [Photodetector bandwidth and noise](netlist.md#photodetector-bandwidth-and-noise)
 covers seeds and Monte Carlo.
 
-**Example.** 1 mW on a detector with `r0=0.8 bw=10GHz idark=10nA` (default `temp=300`,
-`rload=50`):
+**Example.** 1e-3 units on a detector with `r0=0.8 bw=10GHz idark=10nA` (default `temp=300`,
+`rload=50`). Taking a unit as 1 W, that is 1 mW on a 0.8 A/W detector:
 
 ```
 I     = 0.8 · 1e-3 + 10e-9               = 800.01 µA   (mean, once settled)

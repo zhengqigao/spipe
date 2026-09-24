@@ -31,7 +31,7 @@ at exactly those nodes — there is no explicit "connect" statement.
 |---|---|
 | `.mode neff=<n> ng=<n> wl=<m>` | the waveguide mode. `neff` is the effective index at the reference wavelength `wl` (in metres), and `ng` the group index. The index at other wavelengths is linear in λ, `n(λ) = ng + (neff − ng)·λ/wl`, so a device of length `l` has phase `β·l = (ω/c)·n(λ)·l`; a resonance you design at one frequency is placed relative to `wl`, not to the `.freq` grid. Devices inherit these unless they override them. |
 | `.freq <start> <stop> <count>` | optical frequencies to solve at, in Hz. `count = 1` is a single CW carrier. More than one point means that many **independent** channels — see *Incoherent by default* below. The grid is available afterwards as `Photonic(...).omega`, in rad/s. With `count = 1` only `start` is used. |
-| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. A detector turns `|A|²` into `r0·|A|²` amperes. Without a power budget `|A|²` is optical power in **watts**: with `r0=1` (A/W), `1.0@a1` is 1 W of light and 1 A of photocurrent, so a realistic 1 mW laser is `0.0316@a1`. Optional `power=<W>` and `eff=<0..1>` add a power budget, which changes that unit (see *The power budget* below). One amplitude per node, applied to every `.freq` channel alike. |
+| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. `|A|²` is optical power in **source units**, and a detector turns it into `r0·|A|²` amperes. Without a power budget the unit is yours to choose: `1.0@a1` is one unit, whether you think of it as 1 W or 1 mW, and `r0` is amperes per that unit (A/W if the unit is 1 W). Optional `power=<W>` and `eff=<0..1>` add a power budget, which fixes the unit at `power·eff` watts (see *The power budget* below). One amplitude per node, applied to every `.freq` channel alike. |
 | `.prob <node>` | also report the complex optical field at `<node>`, without disturbing it. Each probe returns the two waves at that node: index 0 travels **into**, index 1 **out of**, the first device listed on that node. Without any `.prob` line the `probes` dict comes back empty. |
 
 `.prob` is spelled without the final `e`.
@@ -67,7 +67,7 @@ are driven by a voltage:
 | `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0, default 2), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time; less common: `act_l=`, `kappa1=`, `kappa2=`, `wgu_l=`, `wgl_l=`, `dacoeff0=`… (see below) |
 | `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
 | `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
-| `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W (required), `bw=` bandwidth in Hz, `idark=` dark current in A, `noise=`, `temp=`, `rload=`, `inoise=`, `coherent=1` — see *Photodetector bandwidth and noise* below |
+| `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in amperes per source unit of `|A|²`, i.e. A/W if a unit is 1 W (required), `bw=` bandwidth in Hz, `idark=` dark current in A, `noise=`, `temp=`, `rload=`, `inoise=`, `coherent=1` — see *Photodetector bandwidth and noise* below |
 
 #### `mzm`: the drive
 
@@ -173,7 +173,7 @@ results do not depend on how finely `.tran` samples, once it resolves `bw`.
 | `noise=` | 1 | `0` keeps the bandwidth and drops the noise |
 | `temp=`, `rload=` | 300 K, 50 Ω | set the thermal-noise term `4kT/rload`. `rload=` is **only** a noise parameter: the load the detector actually drives is whatever the `.electronic` section connects to it. |
 | `inoise=` | — | input-referred noise density of the front end, A/√Hz; replaces the `temp=`/`rload=` term. Use it for a real amplifier. |
-| `r1=`, `r2=`, …, `wl=` | — | frequency-dependent responsivity: `R(ω) = r0 + r1·(ω − ω0) + r2·(ω − ω0)² + …` about the angular frequency `ω0 = 2πc/wl`. So `r1` is in A/W per rad/s, and a realistic value is tiny (around 1e-16). `wl=` is required with them, and a negative responsivity gives a warning. |
+| `r1=`, `r2=`, …, `wl=` | — | frequency-dependent responsivity: `R(ω) = r0 + r1·(ω − ω0) + r2·(ω − ω0)² + …` about the angular frequency `ω0 = 2πc/wl`. So `r1` is in `r0`'s unit per rad/s, and a realistic value is tiny (around 1e-16). `wl=` is required with them, and a negative responsivity gives a warning. |
 
 Some limits to be aware of:
 - **The electronic side adds no noise.** Amplifier noise enters only through `inoise=`.
@@ -317,6 +317,8 @@ A photodetector's output node must have a DC path to ground — hence `Rload1` a
 Without one the photocurrent charges the detector's capacitance without limit. The built-in
 engine refuses such a circuit and names the node.
 
-With `1.0@a1` (1 W of light) and `r0=1`, this example makes up to 0.5 A of photocurrent and
-500 V across the 1 kΩ loads. The numbers are unrealistic but harmless here, because the
-example is about the gradient. For realistic levels use a milliwatt laser (`0.0316@a1`).
+With `1.0@a1` (one unit of light) and `r0=1`, this example makes up to 0.5 A of photocurrent
+and 500 V across the 1 kΩ loads, which means a unit of 1 W on a 1 A/W detector. The numbers
+are unrealistic but harmless here, because the example is about the gradient. For milliwatt
+levels on a 1 A/W detector, let a unit be 1 mW and write `r0=1e-3`, or keep `r0=1` and launch
+`0.0316@a1`.
