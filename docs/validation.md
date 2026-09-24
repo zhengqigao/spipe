@@ -8,21 +8,21 @@ python test/run_all.py          # single PASS/FAIL verdict
 python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 408 checks, 11 benches
+## Summary: 421 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
 | `tb01_photonic_algebra` | unitarity, reciprocity, energy, passivity, resonance, a ring against theory | 43 |
 | `tb02_eo_interface` | the `mzm` modulator against textbook MZM physics, including passivity | 41 |
-| `tb03_oe_interface` | photodetector noise, bandwidth, and the detector options through `Photonic` | 19 |
+| `tb03_oe_interface` | photodetector noise (magnitude, correlation, independence of the time step), bandwidth, and the detector options | 24 |
 | `tb04_native_analytic` | built-in engine vs closed-form solutions | 35 |
 | `tb05_native_crosstool` | built-in engine vs HSPICE and Xyce | 33 |
 | `tb06_native_gradients` | autograd vs adjoint vs finite difference | 59 |
 | `tb07_fixedpoint` | convergence, divergence, bistability, stability of the converged state | 35 |
 | `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
-| `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 78 |
+| `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 82 |
 | `tb11_envelope_P3` | optical memory / envelope propagation, its gradients and its failure checks | 15 |
-| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain, including electrical probes | 29 |
+| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain, including electrical probes and detector noise | 33 |
 
 `tb05` needs Xyce or HSPICE and is skipped without them, and two checks in `tb10` need a
 CUDA GPU; everything else runs on PyTorch alone. `tb08` compares against a *stored* INTERCONNECT result, so it needs no Lumerical

@@ -35,13 +35,26 @@ from spipe.core.core import FixedPointError  # noqa: E402
 DEFAULT_SPICE_EXE = {
     'hspice': os.environ.get('SPIPE_HSPICE', 'hspice') + ' ',
     'xyce': os.environ.get('SPIPE_XYCE', 'Xyce') + ' -quiet -hspice-ext all',
+    'native': 'native',
 }
+
+
+def _auto_sim() -> str:
+    """HSPICE if it is installed (the examples' numbers were produced with it), then Xyce, and
+    otherwise the built-in engine, which is always there."""
+    import shutil
+    for name, exe in (('hspice', os.environ.get('SPIPE_HSPICE', 'hspice')),
+                      ('xyce', os.environ.get('SPIPE_XYCE', 'Xyce'))):
+        if shutil.which(exe):
+            return name
+    return 'native'
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """The ``--sim`` / ``--spice-exe`` / ``--work-dir`` / ``--max-iter`` block."""
-    parser.add_argument('--sim', choices=sorted(DEFAULT_SPICE_EXE), default='hspice',
-                        help='which SPICE engine to drive (default: hspice)')
+    parser.add_argument('--sim', choices=['auto'] + sorted(DEFAULT_SPICE_EXE), default='auto',
+                        help='which electronic engine to use (default: auto -- HSPICE if '
+                             'installed, then Xyce, otherwise the built-in engine)')
     parser.add_argument('--spice-exe', default=None,
                         help='full command line of the SPICE executable; overrides --sim')
     parser.add_argument('--work-dir', default=None,
@@ -61,7 +74,9 @@ def resolve_spice_exe(args: argparse.Namespace) -> str:
     from_env = os.environ.get('SPIPE_SPICE_EXE')
     if from_env:
         return from_env
-    return DEFAULT_SPICE_EXE[args.sim]
+    sim = _auto_sim() if args.sim == 'auto' else args.sim
+    print(f"electronic engine: {sim}  (choose with --sim)")
+    return DEFAULT_SPICE_EXE[sim]
 
 
 def work_dir(args: argparse.Namespace, default_name: str) -> str:
@@ -114,6 +129,8 @@ def run_spice(deck_path: str, spice_exe: str) -> Tuple[List[float], Dict[str, Li
     """
     import subprocess
 
+    if spice_exe.strip() == 'native':
+        return _run_native(deck_path)
     if 'xyce' in spice_exe.lower():
         subprocess.run(spice_exe.split() + [deck_path], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -122,6 +139,18 @@ def run_spice(deck_path: str, spice_exe: str) -> Tuple[List[float], Dict[str, Li
     subprocess.run(spice_exe.split() + [deck_path, '-o', deck_path], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     return _parse_lis(deck_path + '.lis')
+
+
+def _run_native(deck_path: str) -> Tuple[List[float], Dict[str, List[float]]]:
+    """``run_spice`` on the built-in engine: the deck's ``.tran``, its ``.print tran`` nodes."""
+    import re
+    from spipe.electronic.native import Netlist
+    text = open(deck_path).read()
+    result = Netlist(text, os.path.dirname(os.path.abspath(deck_path))).tran()
+    names = [n.lower() for line in re.findall(r'(?im)^\s*\.print\s+tran\s+(.*)$', text)
+             for n in re.findall(r'v\(([^)]+)\)', line, flags=re.I)]
+    return ([float(x) for x in result.t],
+            {f'v({n})': [float(x) for x in result.v(n)] for n in names})
 
 
 def _parse_prn(path: str) -> Tuple[List[float], Dict[str, List[float]]]:

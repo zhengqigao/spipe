@@ -18,6 +18,9 @@ def extract(source: str, convert_numeric=False) -> Tuple[Union[str, Any], List[s
     for current_string in remain:
         if '=' in current_string:
             key, value = current_string.split('=')
+            # A repeated key used to keep the last value silently (bw=10e9 ... bw=1e9).
+            if key in kv_pair:
+                raise ValueError(f"'{key}=' is given twice in: {source.strip()}")
             kv_pair[key] = convert(value) if convert_numeric else value
         else:
             string.append(current_string)

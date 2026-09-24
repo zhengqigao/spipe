@@ -364,6 +364,54 @@ def build():
         tb.ok('E2.probe_grad_vs_finite_difference', False, f"{e!r}")
 
     # ------------------------------------------------------------------
+    # Detector noise inside the co-simulation. The seed used to reach only the initial guess,
+    # so two runs with the same seed differed and different seeds gave the same noise; and a
+    # noisy detector next to a noiseless one made the gradient NaN (sqrt of a zero variance).
+    # With the realisation fixed by the seed, the gradient must match a finite difference
+    # taken at that same seed.
+    # ------------------------------------------------------------------
+    try:
+        import tempfile
+        from spipe.core.core import Circuit
+        src = open(os.path.join(REPO, 'examples', 'link_driver_mzm.sp')).read()
+        src = src.replace('pd1 b1 vo1 level1 r0=1.0', 'pd1 b1 vo1 level1 r0=1.0 bw=10e9')
+        noisy_deck = os.path.join(tempfile.mkdtemp(prefix='spipe_tb12_'), 'noisy.sp')
+        open(noisy_deck, 'w').write(src)
+
+        def _noisy(width, seed, grad=False):
+            c = Circuit(noisy_deck, spice_exe='native')
+            w = c.param('mn1', 'W')
+            if width is not None:
+                with torch.no_grad():
+                    w.copy_(torch.tensor(width, dtype=torch.float64))
+            if grad:
+                return c.simulate(seed=seed)[2][:, 0].sum(), w
+            with torch.no_grad():
+                return c.simulate(seed=seed)[2][:, 0].clone(), w
+
+        a1, _ = _noisy(None, 5)
+        b1, _ = _noisy(None, 6)
+        same = Circuit(noisy_deck, spice_exe='native')      # one object, run twice
+        with torch.no_grad():
+            s1 = same.simulate(seed=5)[2][:, 0].clone()
+            s2 = same.simulate(seed=5)[2][:, 0].clone()
+        tb.ok('E3.noise_same_seed_reproduces', bool(torch.equal(s1, s2)) and bool(torch.equal(s1, a1)),
+              'the same Circuit, simulate(seed=5) twice, gives the same noisy photocurrent bit for '
+              'bit (and the same as a fresh Circuit); the noise generator used to run on')
+        tb.ok('E3.noise_seed_changes_realisation', not bool(torch.equal(a1, b1)),
+              'seed=6 gives a different noise realisation from seed=5')
+        loss, w = _noisy(None, 5, grad=True)
+        loss.backward()
+        tb.ok('E3.noise_gradient_finite', bool(torch.isfinite(w.grad).all()),
+              f'd sum I/dW with one noisy detector = {float(w.grad):.6g}')
+        w0 = float(w.detach()); h = w0 * 1e-4
+        fd = float((_noisy(w0 + h, 5)[0].sum() - _noisy(w0 - h, 5)[0].sum()) / (2 * h))
+        tb.lt('E3.noise_grad_vs_finite_difference', abs(float(w.grad) - fd) / abs(fd), 1e-5,
+              f'same realisation: analytic {float(w.grad):.8g} vs central FD {fd:.8g}')
+    except Exception as e:
+        tb.ok('E3.noise_gradient_finite', False, f"{e!r}")
+
+    # ------------------------------------------------------------------
     # Like for like: the unified call must BE the composition. Same netlist, same
     # grid, same loss, once through Circuit.simulate() and once by driving the
     # native engine on the deck Circuit generated, then Photonic on its drive.

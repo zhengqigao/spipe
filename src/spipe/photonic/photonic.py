@@ -1,6 +1,7 @@
 import torch
 from typing import List, Union, Dict, Tuple, Optional
 from spipe.utils import extract, convert
+import re
 import warnings
 from collections import defaultdict
 from .model import _json_path_, _extra_model_
@@ -361,6 +362,60 @@ def _device_length(attr: Dict, class_) -> float:
     return sum(_f(k) for k in params.keys() if k == 'l' or k.endswith('_l'))
 
 
+def _check_sources_connected(srce_node: Dict, node_has_ele: Dict) -> None:
+    """Every launched field is zero: fine if that is what the netlist says (zero light, e.g. to
+    study a detector's dark current and noise), an error if a source sits on a node that is not
+    an open port of the circuit and so never enters it."""
+    stray = [n for n in srce_node if len(node_has_ele.get(n, ())) != 1]
+    if stray or not srce_node:
+        where = ', '.join(f"'{n}' ({'not in the circuit' if n not in node_has_ele else 'joins two devices'})"
+                          for n in stray)
+        raise RuntimeError(
+            "No light enters the circuit: a .source must sit on an open port, a node that "
+            "exactly one device uses" + (f"; {where}." if where else " (there is no .source)."))
+
+
+#: parameters a pd line accepts, besides the responsivity coefficients r0, r1, ...
+_PD_KEYS = ('wl', 'bw', 'idark', 'temp', 'rload', 'inoise', 'coherent', 'noise', 'dt', 'std')
+
+
+def _check_pd_args(name: str, kv: Dict) -> None:
+    """Refuse a pd line with an unknown or non-physical parameter.
+
+    A typo (``bandwith=``) used to be ignored, giving an infinite-bandwidth, noiseless detector,
+    and ``bw=-5``, ``rload=0`` or ``r0=-1`` ran without a word (the last two as inf and a negative
+    photocurrent).
+    """
+    import difflib
+    for key in kv:
+        if re.fullmatch(r'r\d+', key) or key in _PD_KEYS:
+            continue
+        close = difflib.get_close_matches(key, list(_PD_KEYS) + ['r0'], n=1)
+        raise ValueError(f"photodetector {name}: unknown parameter '{key}='"
+                         + (f" (did you mean '{close[0]}='?)" if close else "")
+                         + f". A pd line takes r0= (responsivity, A/W) and optionally "
+                           f"{', '.join(k + '=' for k in _PD_KEYS)}.")
+    if 'r0' not in kv:
+        raise ValueError(f"photodetector {name}: give its responsivity r0= in A/W "
+                         f"(r1=, r2=, ... with wl= add a wavelength dependence).")
+    rules = {'r0': (lambda v: v >= 0, 'must be >= 0 (A/W)'),
+             'bw': (lambda v: v >= 0, 'must be > 0 in Hz (leave it out for an ideal detector)'),
+             'idark': (lambda v: v >= 0, 'must be >= 0 (A)'),
+             'temp': (lambda v: v > 0, 'must be > 0 (K)'),
+             'rload': (lambda v: v > 0, 'must be > 0 (Ohm)'),
+             'inoise': (lambda v: v >= 0, 'must be >= 0 (A/sqrt(Hz))'),
+             'dt': (lambda v: v > 0, 'must be > 0 (s)'),
+             'wl': (lambda v: v > 0, 'must be > 0 (m)')}
+    for key, (ok, why) in rules.items():
+        if key in kv:
+            try:
+                value = float(kv[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"photodetector {name}: {key}={kv[key]!r} is not a number") from None
+            if not ok(value):
+                raise ValueError(f"photodetector {name}: {key}={kv[key]} {why}")
+
+
 def _longest_simple_path(adjacency: Dict, budget: int = 50000, max_depth: int = 512) -> float:
     """Longest simple (loop-free) path of a weighted undirected graph, as a *lower bound*.
 
@@ -492,6 +547,7 @@ class Photonic(object):
                 self.laser_info['eff'] = kv_pair.get('eff', None)
 
             if initial.lower().startswith('pd'):
+                _check_pd_args(initial, kv_pair)
                 self.dout_node.append(strings[0])
                 self.pd_args.append(kv_pair)
                 matched = True
@@ -706,7 +762,12 @@ class Photonic(object):
 
     def simulate(self, t_value: Optional[torch.tensor] = None,
                  param_value: Optional[torch.tensor] = None,
-                 mode: str = 'quasistatic') -> Tuple[torch.Tensor, Dict, Dict]:
+                 mode: str = 'quasistatic',
+                 seed: Optional[int] = None) -> Tuple[torch.Tensor, Dict, Dict]:
+        # seed: reseed the photodetector noise first, so this call's noise is reproducible.
+        # Without it the noise generator simply continues, and every call draws fresh noise.
+        if seed is not None:
+            self.pd_array.reseed(seed)
         # t_value: (time_pin)
         # param_value: (time_pin, dim_pin)
         #
@@ -721,8 +782,17 @@ class Photonic(object):
             raise ValueError(f"Photonic.simulate(mode=...) must be 'quasistatic' or 'envelope', "
                              f"got {mode!r}.")
 
-        if param_value is not None and len(self.mod_element.keys()) == 0:
-            warnings.warn(f"param_value will be ignored because Modulators are not defined in the netlist.")
+        # A circuit with no modulator is the same at every instant: solve it once, then repeat
+        # the answer along t_value, so that the detectors still see a time axis (their bandwidth
+        # and noise need one). A passive receiver used to refuse t_value on its own.
+        passive_time = None
+        if len(self.mod_element.keys()) == 0:
+            if param_value is not None and param_value.numel():
+                warnings.warn("param_value is ignored: the netlist has no modulator to drive.")
+            if t_value is not None:
+                if t_value.ndim != 1:
+                    raise RuntimeError(f"t_value must be a 1D tensor, but got shape {t_value.shape}")
+                passive_time = t_value
             t_value, param_value = None, None
         if (param_value is None) and len(self.mod_element.keys()):
             raise RuntimeError(f"param_value is not provided but Modulators are defined in the netlist")
@@ -751,6 +821,9 @@ class Photonic(object):
             # Hand PDArray the transient grid: both the coherent sum and the bw= low-pass
             # need it, and without it each silently degrades (to the incoherent sum and to
             # no low-pass respectively) behind a warning.
+            if passive_time is not None:
+                res, middle = self._repeat_in_time(res, middle, len(passive_time))
+                t_value = passive_time
             return self.pd_array(res, t_value), middle, power
 
         res, middle = Simulate.apply(t_value, param_value, self.omega, self.node_has_ele,
@@ -763,12 +836,27 @@ class Photonic(object):
                                         (self.dout_node, self.middle_node),
                                         self.inward_node,
                                         self.outward_node,
-                                        self.need_grads
+                                        # keep what backward needs whenever the drive carries a
+                                        # graph, as mode='envelope' does; need_grads=True forces it
+                                        self.need_grads or (torch.is_grad_enabled()
+                                                            and param_value is not None
+                                                            and param_value.requires_grad)
                                         )  # res shape (time_pout, len(omega), dim_pout), but here time_pout = time_pin
         power = self._power_report(res)
 
+        if passive_time is not None:
+            res, middle = self._repeat_in_time(res, middle, len(passive_time))
+            t_value = passive_time
         res = self.pd_array(res, t_value)  # (tim_pout, dim_pout)
         return res, middle, power
+
+    @staticmethod
+    def _repeat_in_time(res: torch.Tensor, middle: Dict, num_t: int):
+        """Repeat a single steady-state solution ``num_t`` times along the time axis."""
+        res = res.expand(num_t, *res.shape[1:])
+        middle = {k: (v.expand(num_t, *v.shape[1:]) if torch.is_tensor(v) and v.shape[0] == 1 else v)
+                  for k, v in middle.items()}
+        return res, middle
 
     def _power_report(self, res: torch.Tensor) -> Dict:
         """Optical power budget of the laser source, in watts.
@@ -931,8 +1019,8 @@ class Simulate(torch.autograd.Function):
                 b[..., line_counter, 0] = src_value
                 line_counter += 1
 
-        if torch.all(b == 0): raise RuntimeError(
-            f"Source is not correctly connected to circuit; simulation will trivially be all zeros.")
+        if torch.all(b == 0):
+            _check_sources_connected(srce_node, node_has_ele)
 
         for ele, attr in itertools.chain(sorted(circuit_element.items()), sorted(mod_element.items())):
 
@@ -1073,7 +1161,9 @@ class Simulate(torch.autograd.Function):
         # grad_output[2] corresponds to dL/dmiddle_res, we know it must be zero.
         # Because our Loss L=L(returned_res) only.
         if not ctx.need_grads:
-            raise RuntimeError("Please set photonic.need_grads to True if backward is needed.")
+            raise RuntimeError("This photonic solve kept nothing for backward: its drive did not "
+                               "require grad when it ran. Make the drive tensor require grad before "
+                               "calling simulate(), or construct Photonic(..., need_grads=True).")
 
         x, omega, t_value, param_value = ctx.saved_tensors
 

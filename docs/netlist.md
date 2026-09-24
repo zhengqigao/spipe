@@ -64,7 +64,7 @@ are driven by a voltage:
 | `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0, default 2), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=`; less common: `act_l=`, `kappa1=`, `kappa2=`, `wgu_l=`, `wgl_l=`, `dacoeff0=`… (see below) |
 | `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
 | `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
-| `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W, `bw=` bandwidth in Hz, `idark=`, `coherent=1` |
+| `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W (required), `bw=` bandwidth in Hz, `idark=` dark current in A, `noise=`, `temp=`, `rload=`, `inoise=`, `coherent=1` — see *Photodetector bandwidth and noise* below |
 
 #### `mzm`: insertion loss and extinction ratio
 
@@ -139,6 +139,38 @@ which equivalent circuit SPIPE inserts:
 
 You can add your own with `spipe.electronic_register('pd', 'level4', "<subckt text>")`;
 `examples/derived/n3_tia.py` does exactly that to swap in a real transimpedance amplifier.
+
+### Photodetector bandwidth and noise
+
+With only `r0=`, a detector is ideal: `I = r0·|E|²`, with infinite bandwidth and no noise.
+
+`bw=<Hz>` gives it a single-pole response with that 3 dB frequency. It also switches on
+**shot and thermal noise**, since a real detector has both. The noise is white at the diode,
+with one-sided density `2q(I + idark) + 4kT/rload` A²/Hz, and passes through the same pole as
+the signal. Its variance is therefore that density times the pole's noise bandwidth,
+`(π/2)·bw`. Neighbouring samples are correlated as a real filtered signal would be, so
+results do not depend on how finely `.tran` samples, once it resolves `bw`.
+
+| parameter | default | meaning |
+|---|---|---|
+| `idark=` | 0 | dark current, A. Adds to the current and to its shot noise. |
+| `noise=` | 1 | `0` keeps the bandwidth and drops the noise |
+| `temp=`, `rload=` | 300 K, 50 Ω | set the thermal-noise term `4kT/rload`. `rload=` is **only** a noise parameter: the load the detector actually drives is whatever the `.electronic` section connects to it. |
+| `inoise=` | — | input-referred noise density of the front end, A/√Hz; replaces the `temp=`/`rload=` term. Use it for a real amplifier. |
+| `r1=`, `r2=`, …, `wl=` | — | wavelength-dependent responsivity, a Taylor series about the wavelength `wl=` |
+
+Some limits to be aware of:
+- **The electronic side adds no noise.** Amplifier noise enters only through `inoise=`.
+- **One realisation per run.** Every iteration of one `Circuit.simulate()` sees the same
+  noise, and `simulate(seed=...)` picks which realisation that is; the same seed gives the
+  same result. A Monte Carlo study loops over seeds. `Photonic.simulate` draws fresh noise at
+  every call, unless you pass it a `seed=`.
+- **Gradients are for that one realisation.** Set `noise=0` to optimise the noiseless
+  response.
+
+A detector with no modulator anywhere in the circuit still takes a time axis:
+`Photonic(netlist).simulate(t)` returns one sample per entry of `t`, which is how you see a
+passive receiver's noise.
 
 ### Incoherent by default
 

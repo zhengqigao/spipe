@@ -68,10 +68,12 @@ def build():
                  detail=f"d(log sigma)/d(log I) = {slope:.4f}; shot noise = 0.5, "
                         f"the old multiplicative model = 1.0")
         # absolute magnitude at the top level
-        exp_sig = math.sqrt(2 * Q * levels[-1] * BW)
-        tb.close('OE.shot_sigma_magnitude', sigmas[-1], exp_sig, 0.25,
+        # The noise passes the detector's single pole, whose equivalent noise bandwidth is
+        # (pi/2) B, not B.
+        exp_sig = math.sqrt(2 * Q * levels[-1] * BW * math.pi / 2)
+        tb.close('OE.shot_sigma_magnitude', sigmas[-1], exp_sig, 0.05,
                  detail=f"sigma at I={levels[-1]:.1e} A, B={BW:.1e} Hz; "
-                        f"expected sqrt(2qIB)={exp_sig:.3e}")
+                        f"expected sqrt(2qI (pi/2) B)={exp_sig:.3e}")
         tb.lt('OE.mean_unbiased', abs(means[-1] - levels[-1]) / levels[-1], 0.02,
               'noise must be zero-mean: it is added in current, not multiplied')
 
@@ -86,11 +88,58 @@ def build():
         ratio = tsig[1] / max(tsig[0], 1e-300)
         tb.lt('OE.thermal_independent_of_I', abs(ratio - 1.0), 0.25,
               f"sigma ratio over a 1000x current change = {ratio:.4f} (must be ~1)")
-        exp_t = 1e-12 * math.sqrt(BW)
-        tb.close('OE.thermal_magnitude', tsig[0], exp_t, 0.25,
-                 detail=f"inoise*sqrt(B) = {exp_t:.3e}")
+        exp_t = 1e-12 * math.sqrt(BW * math.pi / 2)
+        tb.close('OE.thermal_magnitude', tsig[0], exp_t, 0.05,
+                 detail=f"inoise*sqrt((pi/2) B) = {exp_t:.3e}")
     except Exception as e:
         tb.ok('OE.thermal_independent_of_I', False, f"inoise= not supported: {e!r}")
+
+    # ---------- 3b. the noise is the detector-filtered process, not white per sample ------
+    # It used to be drawn independently at every sample, so its spectrum was flat to Nyquist and
+    # 80x too low in band, and a receiver's output noise changed with the .tran step (x2.9
+    # between 101 and 801 points). Now: correlation exp(-dt/tau) between neighbours, and the
+    # noise averaged over a fixed window does not depend on the sampling step.
+    try:
+        B3, T3 = 1e9, 2e-6
+        tau3 = 1 / (2 * math.pi * B3)
+        stds, lag1 = [], None
+        for dt3 in (tau3 / 4, tau3 / 32):
+            n3 = int(round(T3 / dt3))
+            t3 = torch.arange(n3, dtype=torch.float64) * dt3
+            pdc = PDArray([dict(r0=R0, bw=B3, inoise=1e-11, noise=1)], om)
+            xs = torch.zeros((n3, 1, 1), dtype=torch.complex128)
+            y = pdc(xs, t3).reshape(-1).detach().numpy()
+            if lag1 is None:
+                lag1 = float(np.corrcoef(y[:-1], y[1:])[0, 1])
+                tb.close('OE.noise_lag1_correlation', lag1, math.exp(-dt3 / tau3), 0.02,
+                         detail=f'neighbouring samples of single-pole noise correlate as exp(-dt/tau) '
+                                f'= {math.exp(-dt3 / tau3):.4f}; white-per-sample noise gives 0')
+                tb.close('OE.noise_variance_correlated_grid', float(np.var(y)),
+                         1e-22 * B3 * math.pi / 2, 0.1,
+                         detail='stationary variance inoise^2 (pi/2) B on a fine grid too')
+            block = int(round(20e-9 / dt3))                      # average over 20 ns windows
+            m = y[: (len(y) // block) * block].reshape(-1, block).mean(axis=1)
+            stds.append(float(np.std(m)))
+        tb.close('OE.noise_independent_of_time_step', stds[1], stds[0], 0.15,
+                 detail=f'20 ns window average, dt = tau/4 vs tau/32: {stds[0]:.3e} vs {stds[1]:.3e} '
+                        f'(white-per-sample noise differs by sqrt(8))')
+    except Exception as e:
+        tb.ok('OE.noise_lag1_correlation', False, f"raised {e!r}")
+
+    # ---------- 3c. gradients stay finite next to a noiseless detector, noise=0 ----------
+    try:
+        xg = torch.full((8, 1, 2), 0.5, dtype=torch.complex128, requires_grad=True)
+        pdg = PDArray([dict(r0=R0, bw=1e10), dict(r0=R0)], om)
+        pdg(xg, torch.arange(8, dtype=torch.float64) * 1e-11)[:, 0].sum().backward()
+        tb.ok('OE.noise_gradient_finite', bool(torch.isfinite(xg.grad).all()),
+              'd/dx with one noisy and one noiseless detector (sqrt(0) used to give NaN)')
+        xq = torch.full((64, 1, 1), 0.5, dtype=torch.complex128)
+        t64 = torch.arange(64, dtype=torch.float64) * 1e-11
+        quiet = PDArray([dict(r0=R0, bw=1e10, noise=0)], om)(xq, t64).reshape(-1)
+        tb.lt('OE.noise_off_keeps_bandwidth', float((quiet - R0 * 0.25).abs().max()), 1e-15,
+              'noise=0: the bandwidth stays, the noise goes')
+    except Exception as e:
+        tb.ok('OE.noise_gradient_finite', False, f"raised {e!r}")
 
     # ---------- 4. dark current ------------------------------------------
     try:

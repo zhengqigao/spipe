@@ -241,8 +241,8 @@ def main() -> int:
         for lo, hi in zip(widths[:-1], widths[1:]):
             local = (results[hi]['eye'] - results[lo]['eye']) / (hi - lo)
             print(f"        {lo:5.1f} -> {hi:5.1f} um : {local * 1e6:10.6f} uA/um")
-    print('      This is a finite difference, because HSPICE cannot differentiate device '
-          'parameters.\n      For the exact analytic gradient, declare .sensparam and use '
+    print('      This is a finite difference over whole re-simulations, which works on every '
+          'engine.\n      For the exact analytic gradient, declare .sensparam and use '
           "spice_exe='native'; see the module docstring.")
 
     if args.plot:

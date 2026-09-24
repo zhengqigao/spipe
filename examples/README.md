@@ -62,8 +62,13 @@ python examples/derived/n1_dac.py --native      # same transfer on spipe.electro
 python examples/derived/n4_ptc_dotproduct.py --tia   # also swap in N3's real front end
 ```
 
-`mesh_vs_lumerical.py` needs nothing but SPIPE. The `derived/` and loop examples need an
-external SPICE — check with `which hspice` or `which Xyce`.
+`mesh_vs_lumerical.py` needs nothing but SPIPE. The `derived/` and loop examples run on
+whichever electronic engine is available: HSPICE if `which hspice` finds it, then Xyce, and
+otherwise SPIPE's built-in engine. Each prints the engine it used; choose one with `--sim`.
+The numbers quoted on this page were produced with HSPICE. The built-in engine reproduces
+them closely — `n3_tia.py`'s real front end, for example, has a transimpedance of 8.0024 kΩ
+there against 8.0000 kΩ on HSPICE — but is slower: `n1_dac.py`, which runs 128 transients,
+takes about 25 minutes on it.
 
 ## The SKY130 models, for `paper/ptc_hspice/` only
 
@@ -88,9 +93,8 @@ inside the simulator.
 no foundry models at all, and agrees with the SKY130 originals closely — 17 µV across the
 whole 128-code DAC transfer.
 
-Common options: `--sim {hspice,xyce}`, `--spice-exe '<command line>'` (or the
-`SPIPE_SPICE_EXE` environment variable), `--work-dir`, `--max-iter`, `--plot`. The default
-executables are the ones `examples/paper/` uses. Each example writes the netlist it
+Common options: `--sim {auto,hspice,xyce,native}` (default `auto`), `--spice-exe '<command
+line>'` (or the `SPIPE_SPICE_EXE` environment variable), `--work-dir`, `--max-iter`, `--plot`. Each example writes the netlist it
 simulated, the SPICE scratch files and any plots into `examples/_run/<name>/`, so the deck that
 produced a number is always on disk next to it. Set `MPLBACKEND=Agg` when running headless.
 

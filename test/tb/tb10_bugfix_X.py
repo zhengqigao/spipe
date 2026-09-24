@@ -579,6 +579,26 @@ def build():
     finally:
         _sh17.rmtree(_d18, ignore_errors=True)
 
+    # ---------------- X19 : UIC starting state, two more singular cases ---------------
+    # (a) a capacitor on a node set by a source that hangs off another source (Eamp nrf nofs
+    # ... with Vofs nofs 0); (b) a node between an inductor and a floating capacitor, which
+    # nothing sets at t = 0. Both were "singular MNA matrix" on the built-in engine while HSPICE
+    # ran them; they broke two shipped examples (bistable_latch, oeo_electronic) on it.
+    _chain = ("* source chain\nVofs nofs 0 0.1\nVin npd 0 0.5\nEamp nrf nofs npd 0 2\n"
+              "C1 nrf 0 1p\nR1 nrf 0 1k\n.tran 1n 10n\n.end\n")
+    _ok19, _r19 = tb.no_raise('X19.uic_capacitor_on_source_chain',
+                              lambda: _N15.from_string(_chain).tran(1e-9, 1e-8, uic=True))
+    if _ok19:
+        tb.close('X19.uic_source_chain_value', float(_r19.v('nrf')[0]), 1.1, 1e-9,
+                 detail='v(nrf) = 0.1 + 2 * 0.5 from t = 0: the sources win over the capacitor pin')
+    _rlc = ("* series RLC, floating capacitor\nVs a 0 PULSE(0 1 1n 0.1n 0.1n 5n 20n)\n"
+            "L1 a b 10n\nC1 b c 1p\nR1 c 0 50\n.tran 0.1n 10n\n.end\n")
+    _ok19b, _r19b = tb.no_raise('X19.uic_inductor_floating_capacitor',
+                                lambda: _N15.from_string(_rlc).tran(1e-10, 1e-8, uic=True))
+    if _ok19b:
+        tb.lt('X19.uic_undetermined_node_starts_at_zero', abs(float(_r19b.v('b')[0])), 1e-9,
+              'SPICE UIC: a node nothing sets starts at 0 V')
+
     return tb
 
 

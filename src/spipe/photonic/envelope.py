@@ -350,8 +350,8 @@ def _assemble(photonic, t_value: torch.Tensor, param_value: Optional[torch.Tenso
             line += 1
 
     if bool(torch.all(b == 0)):
-        raise RuntimeError(
-            "Source is not correctly connected to circuit; simulation will trivially be all zeros.")
+        from .photonic import _check_sources_connected
+        _check_sources_connected(photonic.srce_node, photonic.node_has_ele)
 
     dynamic: List[Dict] = []
     for ele, attr in itertools.chain(sorted(photonic.circuit_element.items()),

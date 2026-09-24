@@ -112,8 +112,12 @@ class PdModel(BaseModel):
                   "Ipd cathode anode\n"  # at run-time, it will be replaced by a PWL current source
                   "d1 anode cathode diode\n"
                   "r1 anode cathode 10k\n"
-                  "c1 anode cathode 'Cj0*(1+V(anode,cathode)/Vj)**(-M)'\n" # 
-                  ".model diode D(IS=Is N=N)\n"
+                  # The junction capacitance is the diode's own (CJO/VJ/M), which every SPICE and
+                  # the built-in engine evaluate alike. It used to be a separate capacitor,
+                  # 'Cj0*(1+V(anode,cathode)/Vj)**(-M)': wrong sign in the bracket, so at the -1 V
+                  # bias the base was negative -- HSPICE read it as 1 pF, Xyce as 1e-28 F, and the
+                  # built-in engine could not parse it. The physical value there is 0.64 pF.
+                  ".model diode D(IS=Is N=N CJO=Cj0 VJ=Vj M=M)\n"
                   "vneg anode ground -1.0\n"
                   "rf cathode n 10k\n"
                   "cf cathode n 2fF\n"

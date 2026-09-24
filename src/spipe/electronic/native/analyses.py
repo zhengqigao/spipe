@@ -123,6 +123,15 @@ def solve_op(sys: MNASystem, opts: NewtonOptions, t=0.0, dc=True, x0=None,
     return OpRecord(x.detach(), t, dc, opts.gmin, pinned, iters)
 
 
+def _uic_floor_op(sys: MNASystem, opts: NewtonOptions, pins) -> OpRecord:
+    """The UIC starting state with a permanent 1e-12 S shunt on every node (see _tran_once)."""
+    x0 = sys.block_initial_state()
+    make = _dc_assembler(sys, 0.0, False, pins)
+    x, iters = newton_solve(make(opts.gmin, 1e-12, 1.0), x0, opts, sys,
+                            "transient operating point (UIC, 1e-12 S to ground)")
+    return OpRecord(x.detach(), 0.0, False, opts.gmin, pins, iters)
+
+
 def _ic_pins(sys: MNASystem) -> List[Tuple[int, float]]:
     """Initial-condition constraints used by ``uic``.
 
@@ -168,21 +177,34 @@ def _ic_pins(sys: MNASystem) -> List[Tuple[int, float]]:
     # source on a modulator node, whose load model puts a capacitor there -- while HSPICE and
     # Xyce ran the same deck. The capacitor pin gives way. An explicit `.ic` never does: that
     # is the user's own statement, and a conflict there is theirs to see.
-    def _fixed(i: int) -> bool:
-        return i == sys.ground or i in pins
+    # The source may hang off another source rather than off ground (an E whose reference
+    # terminal is set by a V: Eamp nrf nofs ... with Vofs nofs 0), so "fixed" is transitive:
+    # nodes joined by source branches form one group, and a group can take at most one
+    # constraint -- ground, an explicit pin, or one capacitor pin. Extra capacitor pins give way.
+    parent: Dict[int, int] = {}
+
+    def _find(i: int) -> int:
+        parent.setdefault(i, i)
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
 
     for grp in sys.groups:
         if getattr(grp, "letter", "") not in ("v", "e", "h"):
             continue
         for dev in grp.devices:
-            a = sys.node_index(dev.nodes[0])
-            b = sys.node_index(dev.nodes[1])
-            if _fixed(a) and _fixed(b):
-                for node in (a, b):
-                    if node in from_capacitor:
-                        del pins[node]
-                        from_capacitor.discard(node)
-                        break
+            a, b = sys.node_index(dev.nodes[0]), sys.node_index(dev.nodes[1])
+            parent[_find(a)] = _find(b)
+
+    constrained = {_find(sys.ground)}
+    constrained.update(_find(i) for i in pins if i not in from_capacitor)
+    for node in sorted(from_capacitor):
+        root = _find(node)
+        if root in constrained:
+            del pins[node]
+        else:
+            constrained.add(root)
     return sorted(pins.items())
 
 
@@ -471,8 +493,17 @@ def _tran_once(sys: MNASystem, opts: NewtonOptions, tstep, tstop, tstart,
 
     # ---- initial state ---------------------------------------------------
     pins = _ic_pins(sys) if uic else None
-    op = solve_op(sys, opts, t=0.0, dc=False, pinned=pins,
-                  context="transient operating point")
+    try:
+        op = solve_op(sys, opts, t=0.0, dc=False, pinned=pins,
+                      context="transient operating point")
+    except CircuitError:
+        if not uic:
+            raise
+        # Under UIC a node can be left with nothing to set it at t = 0 -- between an inductor
+        # (current pinned) and a floating capacitor, say. SPICE starts such a node at 0 V. The
+        # same follows from keeping a 1e-12 S shunt to ground (SPICE's GMIN) in this one solve:
+        # an undetermined node settles at 0 V, a determined one moves by ~1e-12 relative.
+        op = _uic_floor_op(sys, opts, pins)
     rec.op = op
     x = op.x
 

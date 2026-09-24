@@ -76,7 +76,8 @@ def init_coeff(pd_args: List[Dict], eval_omega) -> torch.Tensor:
         if 'wl' not in pd_args[i].keys():
             if 'r0' not in pd_args[i].keys():
                 raise RuntimeError(
-                    f"the responsitivity of PD is should be defined by Taylor coefficients, r0, r1,..., at wl")
+                    f"photodetector {i + 1} has no responsivity: give r0= in A/W (and r1=, r2=, ... "
+                    f"with wl= for a wavelength dependence)")
             else:
                 coeff[:, i] = pd_args[i]['r0']
         else:
@@ -129,10 +130,13 @@ class PDArray(nn.Module):
     ``r0, r1, ... , wl``
         Taylor coefficients of the responsivity ``R(omega)`` about ``2*pi*c/wl`` [A/W].  Unchanged.
     ``bw``
-        Detector / front-end bandwidth [Hz].  Sets the single-pole low-pass applied to the
-        photocurrent **and** the noise bandwidth ``B``.  Required for any noise: with ``bw``
+        Detector / front-end bandwidth [Hz]: the 3 dB frequency of a single-pole low-pass.  The
+        photocurrent passes through it, and so does the noise (see *Noise* below).  With ``bw``
         absent (the default) the detector has infinite bandwidth and adds no physical noise, which
         is the historical behaviour.
+    ``noise``
+        ``1`` (default) adds shot and thermal noise whenever ``bw`` is given; ``0`` keeps the
+        bandwidth and drops the noise.
     ``idark``
         Dark current [A], default 0.  Added to the photocurrent and to the shot-noise argument.
     ``temp``, ``rload``
@@ -158,6 +162,19 @@ class PDArray(nn.Module):
         **Deprecated.**  The old multiplicative relative-noise term, kept so that existing
         netlists keep running.  It is applied after the physical noise, as
         ``I * (1 + std * randn)``, and warns once per session.
+
+    Noise
+    -----
+    Shot and thermal noise are white at the photodiode, with one-sided density
+    ``S = 2 q (I + I_dark) + 4 k T / R_load`` A^2/Hz (or ``inoise^2`` in place of the thermal
+    term), and they reach the output through the same single pole as the signal.  The samples
+    are those of that filtered continuous process, drawn exactly: an Ornstein-Uhlenbeck
+    recursion ``n[k] = a n[k-1] + sqrt(var (1 - a^2)) w[k]`` with ``a = exp(-dt / tau)``
+    and stationary variance ``var = S * (pi/2) * bw`` -- ``(pi/2) bw`` being the equivalent noise
+    bandwidth of a single pole.  So the variance, the correlation between neighbouring samples
+    and the spectrum are right at any time step, and a receiver's output noise does not depend
+    on how finely ``.tran`` samples it once the grid resolves ``bw``.  Without a time axis the
+    samples are independent, with the same variance.
 
     The time axis
     -------------
@@ -190,6 +207,14 @@ class PDArray(nn.Module):
                                        dtype=torch.bool, device=config['device'])
         self.coherent = torch.tensor([bool(float(pd_arg.get('coherent', 0.0))) for pd_arg in pd_args],
                                      dtype=torch.bool, device=config['device'])
+        #: detectors that add noise: a bandwidth, and not switched off with noise=0
+        self.noisy = (self.bw > 0) & torch.tensor(
+            [bool(float(pd_arg.get('noise', 1.0))) for pd_arg in pd_args],
+            dtype=torch.bool, device=config['device'])
+        #: When set, the generator is reseeded from it at every call, so repeated evaluations
+        #: (the iterations of a co-simulation fixed point, and its gradient) see one and the
+        #: same noise realisation. Circuit sets it from its ``seed``.
+        self.run_seed: Optional[int] = None
 
         self.time = None if time is None else time.to(config['device'])
         self._dt = None
@@ -257,14 +282,37 @@ class PDArray(nn.Module):
         coherent = field.abs() ** 2                                         # (T, D)
         return torch.where(self.coherent.unsqueeze(0), coherent, incoherent)
 
-    def _noise_sigma(self, current: torch.Tensor) -> torch.Tensor:
-        """Standard deviation of the additive current noise, shape ``(T, D)``."""
-        bandwidth = self.bw                                                  # (D,)
-        var_shot = 2.0 * ELEMENTARY_CHARGE * current.clamp(min=0.0) * bandwidth
-        var_johnson = 4.0 * BOLTZMANN * self.temp * bandwidth / self.rload
-        var_density = (self.inoise ** 2) * bandwidth
-        var_thermal = torch.where(self.has_inoise, var_density, var_johnson)
-        return torch.sqrt(var_shot + var_thermal.unsqueeze(0))
+    def _noise_variance(self, current: torch.Tensor) -> torch.Tensor:
+        """Stationary variance of the filtered current noise, shape ``(T, D)``.
+
+        One-sided white density ``S`` times the single pole's equivalent noise bandwidth
+        ``(pi/2) bw``; zero for a detector that adds no noise.
+        """
+        density_shot = 2.0 * ELEMENTARY_CHARGE * current.clamp(min=0.0)
+        density_johnson = 4.0 * BOLTZMANN * self.temp / self.rload
+        density_thermal = torch.where(self.has_inoise, self.inoise ** 2, density_johnson)
+        enbw = torch.where(self.noisy, 0.5 * pi * self.bw, torch.zeros_like(self.bw))
+        return (density_shot + density_thermal.unsqueeze(0)) * enbw
+
+    def _noise(self, current: torch.Tensor, time: Optional[torch.Tensor]) -> torch.Tensor:
+        """One realisation of the detector noise, shape ``(T, D)`` (see *Noise* above)."""
+        var = self._noise_variance(current)
+        # sqrt has an infinite derivative at 0: keep a zero variance (a noiseless detector, or
+        # zero light with no thermal term) out of it, or every gradient becomes NaN.
+        positive = var > 0
+        sigma = torch.where(positive, torch.sqrt(torch.where(positive, var, torch.ones_like(var))),
+                            torch.zeros_like(var))
+        draws = self._randn(current.shape)
+        if time is None or current.shape[0] < 2:
+            return sigma * draws
+        tau = 1.0 / (2.0 * pi * torch.where(self.noisy, self.bw, torch.ones_like(self.bw)))
+        dt = (time[1:] - time[:-1]).unsqueeze(-1)                          # (T-1, 1)
+        a = torch.exp(-dt / tau.unsqueeze(0))                              # (T-1, D)
+        innovation = torch.sqrt((1.0 - a ** 2).clamp(min=0.0))
+        out = [sigma[0] * draws[0]]
+        for k in range(a.shape[0]):
+            out.append(a[k] * out[-1] + innovation[k] * sigma[k + 1] * draws[k + 1])
+        return torch.stack(out)
 
     def forward(self, x: torch.Tensor, time: Optional[torch.Tensor] = None) -> torch.Tensor:
         # x    shape (len(time), len(omega), len(dout_node))
@@ -272,6 +320,8 @@ class PDArray(nn.Module):
         # coeff shape (len(omega), len(dout_node))
         global _STD_DEPRECATION_WARNED
 
+        if self.run_seed is not None:
+            self.reseed(self.run_seed)
         time_axis = self._time_axis(x.shape[0], time)
 
         current = self._photocurrent(x, time_axis)
@@ -291,8 +341,8 @@ class PDArray(nn.Module):
 
         current = current + self.idark
 
-        if bool((self.bw > 0).any()):
-            current = current + self._noise_sigma(current) * self._randn(current.shape)
+        if bool(self.noisy.any()):
+            current = current + self._noise(current, time_axis)
 
         if bool((self.std != 0).any()):
             if not _STD_DEPRECATION_WARNED:

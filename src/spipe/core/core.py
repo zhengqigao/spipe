@@ -816,9 +816,11 @@ class Circuit(object):
             (photocurrent[:, 0] ** 2).sum().backward()
             w.grad                                             # d(optical) / dW
 
-        :param seed: overrides ``config['seed']`` for this run.  The seed is applied to a private
-            ``torch.Generator``, so the caller's global RNG state is left untouched, and the same
-            seed always reproduces the same result bit for bit.
+        :param seed: overrides ``config['seed']`` for this run.  It seeds the random initial
+            guess and the photodetector noise, through private ``torch.Generator`` objects, so
+            the caller's global RNG state is left untouched and the same seed always reproduces
+            the same result bit for bit.  All iterations of one run see the same noise
+            realisation; pass a different seed for a different one (a Monte Carlo loop).
         :param x0: an explicit initial guess for the modulator drive voltages, shape
             ``(len(time), number of active photonic devices)``; a scalar or a 1-D row is
             broadcast.  ``None`` (the default) keeps the historical random start.  A circuit
@@ -855,6 +857,8 @@ class Circuit(object):
                                seed: Optional[int] = None,
                                x0: Optional[torch.Tensor] = None
                                ) -> Tuple[Dict, Dict, torch.Tensor, torch.Tensor, Dict]:
+        # One noise realisation per run: every fixed-point iteration sees the same detector noise.
+        self.p_circuit.pd_array.run_seed = int(config['seed'] if seed is None else seed)
         shape = (len(t), len(self.p_circuit.mod_element.keys()))
 
         if x0 is None:
@@ -1164,6 +1168,7 @@ class Circuit(object):
             not converge is *not* returned.
         """
         t = self.time if t is None else t
+        self.p_circuit.pd_array.run_seed = int(config['seed'] if seed is None else seed)
         shape = (len(t), len(self.p_circuit.mod_element.keys()))
         if x0 is None:
             seed = config['seed'] if seed is None else seed

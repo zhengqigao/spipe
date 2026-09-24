@@ -196,8 +196,8 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**408 checks, and the exit status is 0 only if every one passed**, so it drops straight
-into CI. `--quick` runs the fast ~280 of them in under a minute. Almost all of it needs
+**421 checks, and the exit status is 0 only if every one passed**, so it drops straight
+into CI. `--quick` runs the fast ~290 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:
@@ -226,7 +226,7 @@ examples/
 ├── bias_control.py         automatic modulator bias control at quadrature
 ├── oeo_optical_delay.py    a case SPIPE deliberately REFUSES to simulate
 ├── link_driver_mzm.sp      the two-domain netlist used above
-├── derived/                circuits that run on the built-in engine, no PDK needed
+├── derived/                the paper's circuits on level-1 devices: any engine, no PDK needed
 └── paper/                  the figures from the TCAD paper
 ```
 
