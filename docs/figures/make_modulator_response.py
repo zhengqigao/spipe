@@ -1,4 +1,4 @@
-"""Draw docs/figures/modulator_response.png: the mzm phase response to a step in the drive,
+"""Draw docs/figures/modulator_response.png: the MZM phase change after a step in the drive,
 for several response times tau.
 
 Every curve is computed by SPIPE's own modulator model (MZM._drive, the code path a simulation
@@ -65,7 +65,7 @@ ax.set_ylim(-0.03, 1.05)
 for side in ('top', 'right'):
     ax.spines[side].set_visible(False)
 ax.legend(frameon=False, fontsize=9, loc='lower right')
-ax.set_title('mzm phase response to a step in the drive:  τ·dΔφ/dt + Δφ = π·(V − vbias)/vpi',
+ax.set_title('MZM phase change after a step in the drive:  τ·dΔφ/dt + Δφ = π·(V − vbias)/vpi',
              fontsize=10.5)
 fig.tight_layout()
 out = os.path.join(HERE, 'modulator_response.png')

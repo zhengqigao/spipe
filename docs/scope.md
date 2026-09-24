@@ -38,7 +38,7 @@ modulator's response.
 The response is applied to `V − vbias` before anything else, and the loss modulation
 (`dacoeff*`) follows the same filtered drive, as carrier density does in a real device.
 
-![mzm phase response to a drive step for several time constants](figures/modulator_response.png)
+![MZM phase change after a drive step, for several time constants](figures/modulator_response.png)
 
 ### Choosing `τ`
 
