@@ -66,8 +66,11 @@ SPIPE **raises** rather than returning a large, meaningless number.
 
 ## Turning gradients on and off
 
-There is one `simulate()`, and `.sensparam` is the switch. The graph costs about 1.65× the
-plain runtime, so `simulate()` builds it only when something needs it:
+There is one `simulate()`, and `.sensparam` is the switch. Gradients are not free. On the
+README example, recording the graph makes the run 1.7× slower, and `backward()` adds about a
+quarter of that again: 8.9 s plain, against 15.2 s + 4.1 s with the gradient, 2.2× in all
+(measured on a shared server; the ratio is what carries over). So `simulate()` builds the graph
+only when something needs it:
 
 | situation | what happens |
 |---|---|

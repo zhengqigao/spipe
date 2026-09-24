@@ -685,6 +685,58 @@ def build():
     tb.raises('X21.mos_zero_length_refused', lambda: _mos("M1 d g 0 0 nch W=20u L=0"), Exception)
     tb.raises('X21.mos_negative_width_refused', lambda: _mos("M1 d g 0 0 nch W=-20u L=1u"), Exception)
 
+    # ---------------- X22 : memory budget and single-precision phases -----------------------
+    # Below 512 unknowns the dense batch ignored its memory budget (13 GB for 129 devices over
+    # 2000 samples); it is now solved in time blocks (plain) or goes sparse (gradient).
+    from spipe.photonic import photonic as _pm22
+    try:
+        tb.ok('X22.dense_over_budget_grad_goes_sparse',
+              _pm22._solver_backend(448, 2000, 1, need_grads=True) == 'sparse'
+              and _pm22._solver_backend(448, 2000, 1, need_grads=False) == 'dense',
+              '448 unknowns x 2000 samples: sparse for a gradient, blocked dense without')
+    except Exception as _e:
+        tb.ok('X22.dense_over_budget_grad_goes_sparse', False, repr(_e))
+    try:
+        _nl22 = [".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 193.0e12 193.2e12 3",
+                 ".source 1.0@a1 0.3j@a2", "mzm0 a1 a2 b1 b2 v level1 vpi=2.0 act_l=1e-9"]
+        _prev = ("b1", "b2")
+        for _i in range(8):
+            _nxt = (f"c{_i}", f"d{_i}")
+            _nl22.append(f"pbum{_i} {_prev[0]} {_prev[1]} {_nxt[0]} {_nxt[1]} theta={0.1 * _i + 0.2} phi=0.3 l=5e-6")
+            _prev = _nxt
+        _nl22 += [f"pd1 {_prev[0]} v1 level1 r0=1", f"pd2 {_prev[1]} v2 level1 r0=1"]
+        _nl22 = [x + "\n" for x in _nl22]
+        _t22 = torch.arange(300, dtype=torch.float64) * 1e-10
+        _v22 = torch.linspace(0, 2, 300, dtype=torch.float64).reshape(-1, 1)
+        _saved = sp.config.get('photonic_dense_budget')
+        _outs = []
+        for _b in (10 ** 13, 64 * 1024):
+            sp.config['photonic_dense_budget'] = _b
+            _outs.append(sp.Photonic(_nl22).simulate(_t22, _v22)[0])
+        if _saved is None:
+            sp.config.pop('photonic_dense_budget', None)
+        else:
+            sp.config['photonic_dense_budget'] = _saved
+        tb.ok('X22.blocked_dense_solve_identical', bool(torch.equal(_outs[0], _outs[1])),
+              'the dense batch solved in time blocks gives bit-identical results')
+    except Exception as _e:
+        tb.ok('X22.blocked_dense_solve_identical', False, repr(_e))
+
+    # float32 phases on a 1 cm ring: 93 % wrong, silently
+    _rd = sp.config['real_dtype']; _cd = sp.config['complex_dtype']
+    try:
+        sp.config['real_dtype'] = torch.float32; sp.config['complex_dtype'] = torch.complex64
+        with warnings.catch_warnings(record=True) as _w22:
+            warnings.simplefilter("always")
+            sp.Photonic([x + "\n" for x in [".mode neff=2.35 ng=4.0 wl=1550e-9",
+                         ".freq 193.1e12 193.15e12 4", ".source 1.0@a1",
+                         "mzi0 a1 a2 b1 b2 theta=0.1", "wg0 b2 a2 l=0.01 alpha=0.999",
+                         "pd1 b1 o1 level1 r0=1.0"]])
+        tb.ok('X22.float32_long_phase_warns', any('float32' in str(x.message) for x in _w22),
+              'a float32 run with a 1e5 rad phase is warned about')
+    finally:
+        sp.config['real_dtype'] = _rd; sp.config['complex_dtype'] = _cd
+
     return tb
 
 

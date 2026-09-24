@@ -93,7 +93,13 @@ def _jacobian_chunk(num_time: int, num_freq: int, num_port: int) -> int:
     return max(1, min(chunk, num_time))
 
 
-def _solver_backend(dim: int, num_time: int, num_freq: int) -> str:
+def _dense_bytes(dim: int, num_time: int, num_freq: int) -> int:
+    """Bytes of the dense ``(T, F, dim, dim)`` system batch (the solve copies it once more)."""
+    itemsize = torch.empty(0, dtype=config['complex_dtype']).element_size()
+    return num_time * num_freq * dim * dim * itemsize
+
+
+def _solver_backend(dim: int, num_time: int, num_freq: int, need_grads: bool = False) -> str:
     """Pick the linear-solver back end for ``num_time * num_freq`` systems of size ``dim``.
 
     ``dim`` is ``2 * num_node``.  See :data:`SPARSE_DIM_THRESHOLD` and
@@ -113,9 +119,15 @@ def _solver_backend(dim: int, num_time: int, num_freq: int) -> str:
     if dim >= SPARSE_DIM_THRESHOLD:
         return 'sparse'
     budget = config.get('photonic_dense_budget', DENSE_MEMORY_BUDGET)
-    itemsize = torch.empty(0, dtype=config['complex_dtype']).element_size()
-    if dim >= SPARSE_MIN_DIM and num_time * num_freq * dim * dim * itemsize > budget:
-        return 'sparse'
+    if _dense_bytes(dim, num_time, num_freq) > budget:
+        if dim >= SPARSE_MIN_DIM:
+            return 'sparse'
+        # Narrow systems stay dense -- one batched LAPACK call beats one SuperLU call per
+        # system by ~5x -- and a plain solve is done in time chunks that fit the budget. A
+        # gradient needs every factorisation kept for backward, which is the whole batch:
+        # that goes sparse, whose factors are small. (Below SPARSE_MIN_DIM the budget used to
+        # be ignored: 129 devices over 2000 samples took 13 GB, and 5000 samples ran out.)
+        return 'sparse' if need_grads else 'dense'
     return 'dense'
 
 
@@ -507,6 +519,7 @@ class Photonic(object):
         self.preprocess()
 
         self.pd_array = PDArray(self.pd_args, self.omega)
+        self._check_phase_precision()
 
     def preprocess(self) -> None:
 
@@ -785,7 +798,11 @@ class Photonic(object):
         # group delay at the simulated carriers (sees resonators: a ring's photon lifetime is its
         # round trip times its finesse, which no path length shows -- 1.8 ps vs 279 ps on a
         # high-Q ring, and the check used to stay silent).
-        path_tau, carrier_tau = self.max_group_delay(), self.carrier_group_delay(drive)
+        path_tau = self.max_group_delay()
+        # The carrier measurement is up to six extra solves -- 4x the simulation itself on a
+        # 64x64 mesh. When the path length alone already crosses the threshold the warning is
+        # certain, so skip it.
+        carrier_tau = 0.0 if path_tau > 0.1 * dt else self.carrier_group_delay(drive)
         tau = max(path_tau, carrier_tau)
 
         if tau > 0.1 * dt and not getattr(self, '_quasistatic_warned', False):
@@ -817,6 +834,41 @@ class Photonic(object):
                 stacklevel=2)
 
         return tau
+
+    def _check_phase_precision(self) -> None:
+        """Warn when single-precision phases cannot resolve the circuit.
+
+        With ``config['real_dtype'] = float32`` every propagation phase ``beta * l`` is rounded to
+        about 6e-8 of itself. That is harmless for short waveguides and fatal for a long
+        resonator: a 1 cm ring has beta*l ~ 1e5 rad, rounded to ~8e-3 rad, wider than its
+        linewidth -- its spectrum came out 93 % wrong, with no message. Keeping the real dtype at
+        float64 (and the solve in complex64, if memory matters) avoids it.
+        """
+        if config['real_dtype'] != torch.float32 or self.omega is None:
+            return
+        omega_max = float(self.omega.max())
+        table = _model_info()
+        worst, name = 0.0, None
+        for ele, attr in {**self.circuit_element, **self.mod_element}.items():
+            entry = _match(ele, table)
+            if entry is None:
+                continue
+            try:
+                length = _device_length(attr, _model_class(entry['model_name'], entry))
+                index = float(attr.get('neff', self.mode_info.get('neff', 1.0)))
+            except (TypeError, ValueError):
+                continue
+            phase = omega_max * index * length / FreeLightSpeed
+            if phase > worst:
+                worst, name = phase, ele
+        error = worst * float(torch.finfo(torch.float32).eps)
+        if error > 1e-4:
+            warnings.warn(
+                f"config['real_dtype'] is float32, and {name} has a propagation phase of "
+                f"{worst:.3g} rad, which float32 holds only to about {error:.2g} rad. In a "
+                f"resonator that is a large error (a 1 cm ring came out 93 % wrong). Keep "
+                f"real_dtype = torch.float64; complex_dtype = torch.complex64 still halves the "
+                f"dense solve's memory and stays accurate.", RuntimeWarning, stacklevel=3)
 
     def param(self, device: str, name: str) -> torch.Tensor:
         """Make a passive device parameter trainable, and return it as a float leaf tensor.
@@ -1223,7 +1275,17 @@ class Simulate(torch.autograd.Function):
             raise RuntimeError("Internal error: the photonic system matrix was assembled with "
                                "duplicate (row, column) entries.")
 
-        backend = _solver_backend(dim, num_time, num_freq)
+        backend = _solver_backend(dim, num_time, num_freq, need_grads)
+        if (backend == 'sparse' and device.type != 'cpu'
+                and config.get('photonic_solver', 'auto') == 'auto'
+                and not getattr(Simulate, '_sparse_on_gpu_warned', False)):
+            Simulate._sparse_on_gpu_warned = True
+            warnings.warn(
+                f"config['device'] is {device}, but this photonic system ({dim} unknowns, "
+                f"{num_time} x {num_freq} solves) is solved by the sparse back end, which runs "
+                f"on the CPU (SciPy SuperLU): the GPU does nothing here. Set "
+                f"spipe.config['photonic_solver'] = 'dense' to keep it on the GPU, memory "
+                f"permitting.", RuntimeWarning, stacklevel=3)
 
         if backend == 'sparse':
             all_value = static_value.expand(num_time, num_freq, static_value.shape[-1])
@@ -1232,24 +1294,40 @@ class Simulate(torch.autograd.Function):
             factor = _SparseLU(all_index, all_value, dim, num_time, num_freq, keep=need_grads)
             del all_index, all_value
             x = factor.solve(b)
-        else:
+        elif need_grads:
             A = torch.zeros([num_time, num_freq, dim, dim], dtype=cdtype, device=device)
             flat = A.view(num_time, num_freq, dim * dim)
             flat[..., static_index] = static_value
             if dynamic_index is not None:
                 flat[..., dynamic_index] = dynamic_value
             del flat, static_index, static_value, dynamic_index, dynamic_value
-
-            if need_grads:
-                # SPEC-P2.2: one LU factorisation, reused by the forward solve and by every
-                # adjoint right-hand side.  An explicit matrix inverse used to be formed here, which is
-                # both slower and less accurate.
-                factor = _DenseLU(A)
+            # SPEC-P2.2: one LU factorisation, reused by the forward solve and by every
+            # adjoint right-hand side.  An explicit matrix inverse used to be formed here, which is
+            # both slower and less accurate.
+            factor = _DenseLU(A)
+            del A
+            x = factor.solve(b)
+        else:
+            # No backward: assemble and solve the dense batch a block of time samples at a time,
+            # so the memory stays inside config['photonic_dense_budget'] however long the run.
+            # The systems are independent, so the blocks give the same numbers as one batch.
+            factor = None
+            budget = config.get('photonic_dense_budget', DENSE_MEMORY_BUDGET)
+            per_time = max(1, 2 * _dense_bytes(dim, 1, num_freq))     # A plus the solver's copy
+            block = max(1, min(num_time, int(budget // per_time)))
+            pieces = []
+            for start in range(0, num_time, block):
+                stop = min(num_time, start + block)
+                A = torch.zeros([stop - start, num_freq, dim, dim], dtype=cdtype, device=device)
+                flat = A.view(stop - start, num_freq, dim * dim)
+                flat[..., static_index] = static_value
+                if dynamic_index is not None:
+                    flat[..., dynamic_index] = dynamic_value[start:stop]
+                del flat
+                pieces.append(torch.linalg.solve(A, b.expand(stop - start, num_freq, dim, 1)))
                 del A
-                x = factor.solve(b)
-            else:
-                factor = None
-                x = torch.linalg.solve(A, b.expand(num_time, num_freq, dim, 1))
+            x = pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim=0)
+            del pieces, static_index, static_value, dynamic_index, dynamic_value
 
         ctx.need_grads = need_grads
         if need_grads:

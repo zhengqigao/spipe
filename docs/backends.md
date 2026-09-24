@@ -71,7 +71,8 @@ can hit that cap before its error target, and the result is then less accurate t
 engine's own estimate says it should be. It returns anyway.
 
 Measured on `examples/link_driver_mzm.sp`: 40 output samples over 40 ns, 0.2 ns edges, an
-output node with a ~50 ps time constant:
+output node with a ~50 ps time constant. Absolute times on a shared server vary by about 50 %
+between runs (a later measurement of the default took 8.9 s), so compare within the column:
 
 | internal steps per output sample | runtime | worst error in the modulator drive |
 |---|---|---|

@@ -367,6 +367,23 @@ def build():
     except Exception as _e:
         tb.ok('P3.quasistatic_guard_sees_hidden_ring', False, repr(_e))
 
+    # ---- a differentiable envelope run respects its memory budget -------------------------
+    # The recorded graph grows with samples x carriers x ports; it reached 75 GB unchecked.
+    try:
+        _saved = sp.config.get('envelope_grad_max_bytes')
+        sp.config['envelope_grad_max_bytes'] = 1024 ** 2          # 1 MB: this run needs more
+        _dg = _d0.clone().requires_grad_(True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tb.raises('P3.envelope_gradient_budget_enforced',
+                      lambda: _ph.simulate(_t, _dg, mode='envelope'), RuntimeError,
+                      'a gradient run over envelope_grad_max_bytes is refused before it allocates')
+    finally:
+        if _saved is None:
+            sp.config.pop('envelope_grad_max_bytes', None)
+        else:
+            sp.config['envelope_grad_max_bytes'] = _saved
+
     return tb
 
 

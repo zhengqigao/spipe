@@ -207,8 +207,8 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**439 checks, and the exit status is 0 only if every one passed**, so it drops straight
-into CI. `--quick` runs the fast ~300 of them in under a minute. Almost all of it needs
+**443 checks, and the exit status is 0 only if every one passed**, so it drops straight
+into CI. `--quick` runs the fast ~310 of them in about a minute and a half. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:
@@ -272,6 +272,7 @@ The full discussion, including two further assumptions worth knowing about:
 | [docs/backends.md](docs/backends.md) | choosing an electronic engine, and their traps |
 | [docs/scope.md](docs/scope.md) | the physics assumptions and where they bind |
 | [docs/envelope.md](docs/envelope.md) | optical memory: delays and resonators in time (`mode='envelope'`) |
+| [docs/performance.md](docs/performance.md) | scaling, memory, the GPU, precision, and every setting |
 | [docs/validation.md](docs/validation.md) | every measured number |
 
 ## Layout
@@ -334,18 +335,24 @@ trip gain sits near 1. The time is spent elsewhere. Profiling shows 40–99 % of
 solve is the Python loop that builds each device, and 90–96 % of a backward pass is the
 per-modulator Jacobian. Batching both is the real speed-up.
 
-**4. GPU.** The photonic solve runs correctly on a GPU, and gradients now do too. But
+**4. GPU.** The photonic solve runs correctly on a GPU (`spipe.config['device'] =
+torch.device('cuda')`; see [docs/performance.md](docs/performance.md)), and gradients now do too. But
 measured end to end it is *slower* than the CPU (0.26–0.65×), because that same
 one-device-at-a-time assembly loop launches many tiny GPU operations. Batching the assembly
 (item 3) is what would let a GPU pay off; we will publish measurements on a modern GPU
 rather than a prediction.
 
-**5. Choosing your precision.** `spipe.config` already accepts `complex64`, which halves the
-solve's memory at an accuracy cost of about 1e-3 — most of it from single-precision phase
-arithmetic in long waveguides, not the solve. Keeping the device models in double and only
-the solve in single ("mixed") measured 9e-8. The plan is one `precision` setting instead of
-two independent dtypes, because a mismatched pair currently runs silently at reduced
-accuracy. (`complex32` is not possible: PyTorch has no half-precision complex linear
+**5. Choosing your precision.** `spipe.config` has two dtypes: `real_dtype` for the device
+parameters and `complex_dtype` for the solve.
+- **Mixed precision is safe.** Setting only `complex_dtype = torch.complex64` halves the dense
+  solve's memory. It stays within about 1e-5 of double precision, even on a resonant ring. The
+  sparse solver used for large circuits works in double precision regardless.
+- **A `float32` real dtype is not safe.** Every propagation phase `β·l` is then rounded to about
+  6e-8 of itself. On a mesh of short waveguides that is harmless (1e-6). On a resonator it is
+  not: a 1 cm ring's phase of 1e5 rad is rounded to 8e-3 rad, wider than its linewidth, and
+  its spectrum came out 93 % wrong. SPIPE now warns when a `float32` run has a phase that large.
+
+The plan is one `precision` setting instead of two independent dtypes. (`complex32` is not possible: PyTorch has no half-precision complex linear
 algebra.)
 
 Contributions and bug reports are welcome. If something in here is wrong, or a number does

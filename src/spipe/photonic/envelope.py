@@ -515,6 +515,45 @@ def _check_filter_budget(num_freq: int, num_taps: int, num_entry: int) -> None:
             f"{budget / 1024 ** 3:.2f} GB), or use mode='quasistatic'.")
 
 
+def _gradient_bytes(model, num_time: int) -> int:
+    """Rough size of the autograd graph a differentiable envelope run records.
+
+    Every time step keeps its history gather ``(P, F, M)`` and the ``(F, M, M)`` system it
+    solved; the recursion runs ``T`` steps. The factor 3 is measured: backward's temporaries
+    roughly triple what the forward records (3.2 MB per step against 1.1 MB estimated on an
+    8x8 mesh with 64 carriers).
+    """
+    itemsize = torch.empty(0, dtype=config['complex_dtype']).element_size()
+    num_freq, num_port = model.transfer.u0.shape
+    taps = int((model.offsets > 0).sum())
+    per_step = 3 * (taps * num_freq * num_port + 4 * num_freq * num_port * num_port) * itemsize
+    return int(num_time * per_step)
+
+
+#: Ceiling on a differentiable envelope run's autograd graph (see :func:`_gradient_bytes`).
+#: Override with ``spipe.config['envelope_grad_max_bytes']``.
+MAX_GRADIENT_BYTES = 16 * 1024 ** 3
+
+
+def _check_gradient_budget(model, num_time: int) -> None:
+    """The gradient's memory is bounded by ``envelope_max_bytes`` too, not only the filters.
+
+    A differentiable run used to grow without limit: 75 GB on a 16x16 mesh over 2000 samples
+    and 128 carriers, with nothing to stop it.
+    """
+    need = _gradient_bytes(model, num_time)
+    budget = int(config.get('envelope_grad_max_bytes', MAX_GRADIENT_BYTES))
+    if need > budget:
+        raise RuntimeError(
+            f"mode='envelope' with gradients would record about {need / 1024 ** 3:.1f} GB of "
+            f"autograd graph: {num_time} time steps, each keeping its history of "
+            f"{int((model.offsets > 0).sum())} taps x {model.transfer.u0.shape[0]} carriers x "
+            f"{model.transfer.u0.shape[1]} modulator ports. That is above "
+            f"spipe.config['envelope_grad_max_bytes'] ({budget / 1024 ** 3:.2f} GB). Use fewer time "
+            f"samples or .freq points, run without gradients (torch.no_grad(), or a drive that "
+            f"does not require grad), or raise the limit.")
+
+
 def _dirichlet(x: torch.Tensor, length: int) -> torch.Tensor:
     """Length-``L`` Dirichlet (periodic sinc) kernel ``W(x)``.
 
@@ -1039,6 +1078,8 @@ def simulate_envelope(photonic, t_value: Optional[torch.Tensor],
     # Record a graph only when a gradient was asked for. The device attributes are
     # nn.Parameters, which require grad, so without this every envelope result carried a graph
     # nobody wanted -- and `.numpy()` on it raised.
+    if differentiable:
+        _check_gradient_budget(model, len(t_value))
     with (contextlib.nullcontext() if differentiable else torch.no_grad()):
         y = _envelope_recursion(model.transfer, model.dynamic, model.g_taps, model.offsets,
                                 len(t_value))
