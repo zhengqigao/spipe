@@ -295,6 +295,52 @@ def build():
     except Exception as e:
         tb.ok('E2.fixed_point_dtype_random_guess', False, f"{e!r}")
 
+    # ------------------------------------------------------------------
+    # Like for like: the unified call must BE the composition. Same netlist, same
+    # grid, same loss, once through Circuit.simulate() and once by driving the
+    # native engine on the deck Circuit generated, then Photonic on its drive.
+    # (The docs once set two different circuits' gradients side by side as if
+    # they were this comparison; this is the comparison.)
+    # ------------------------------------------------------------------
+    try:
+        from spipe.core.core import Circuit
+        from spipe.electronic.native import Netlist as _Net
+        from spipe.electronic.electronic import (_resample, _resample_weights,
+                                                 _native_signal)
+        link = os.path.join(REPO, 'examples', 'link_driver_mzm.sp')
+
+        ck = Circuit(link, spice_exe='native')
+        w_u = ck.param('mn1', 'W')
+        _, _, pc_u, drive_u, _ = ck.simulate()
+        loss_u = (pc_u[:, 0] ** 2).sum()
+        loss_u.backward()
+
+        e = ck.e_circuit
+        net = _Net(e.native_deck)
+        net.options['lte_reltol'] = e._native.options['lte_reltol']
+        w_h = net.param('mn1', 'W'); w_h.requires_grad_(True)
+        grid = ck.time.detach().to(torch.float64).reshape(-1)
+        step = (float(grid[-1]) - float(grid[0])) / (len(grid) - 1)
+        res = net.tran(step, float(grid[-1]), tstart=float(grid[0]), uic=e.native_uic)
+        drive_h = _resample(_native_signal(res, 'v(vdrv)').reshape(-1, 1),
+                            _resample_weights(torch.as_tensor(res.t, dtype=torch.float64)
+                                              .reshape(-1), grid))
+        phot = [l.strip() + '\n' for l in open(link).read().split('.photonic', 1)[1]
+                .splitlines() if l.strip() and not l.strip().startswith('*')]
+        pc_h, _, _ = Photonic(phot, need_grads=True).simulate(grid, drive_h)
+        loss_h = (pc_h[:, 0] ** 2).sum()
+        loss_h.backward()
+
+        tb.lt('E2.unified_equals_composed_drive',
+              float((drive_u.detach() - drive_h.detach()).abs().max()), 1e-12,
+              'modulator drive: Circuit.simulate() vs the native engine run by hand')
+        tb.close('E2.unified_equals_composed_loss', float(loss_u), float(loss_h), 1e-12,
+                 detail='same circuit, same grid, same loss')
+        tb.close('E2.unified_equals_composed_grad', float(w_u.grad), float(w_h.grad), 1e-10,
+                 detail=f"dL/dW = {float(w_u.grad):.10f} both ways")
+    except Exception as e:
+        tb.ok('E2.unified_equals_composed_grad', False, f"{e!r}")
+
     # gradient_based_simulate must be implemented or deleted, never left as a
     # commented-out block that reads like a feature.
     try:

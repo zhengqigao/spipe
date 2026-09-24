@@ -8,7 +8,7 @@ python test/run_all.py          # single PASS/FAIL verdict
 python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 362 checks, 11 benches
+## Summary: 365 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
@@ -22,7 +22,7 @@ python test/run_all.py --quick  # the fast subset
 | `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
 | `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 59 |
 | `tb11_envelope_P3` | optical memory / envelope propagation, and its gradients | 13 |
-| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 23 |
+| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 26 |
 
 `tb05` needs Xyce or HSPICE and is skipped without them, and two checks in `tb10` need a
 CUDA GPU; everything else runs on PyTorch alone. `tb08` compares against a *stored* INTERCONNECT result, so it needs no Lumerical
@@ -116,11 +116,15 @@ Gradients:
 The capability the method exists for — an optical output differentiated with respect to an
 electronic device parameter, through driver → modulator → photodetector:
 
-```
-d|E_out|²/dW   analytic    = -115016.7648
-               finite diff = -115016.7645
-               rel. error  =  1.91e-09
-```
+| check | measured |
+|---|---|
+| `dL/dW` through `Circuit.simulate()` vs finite differences (`examples/link_driver_mzm.sp`) | `4.6e-08`, the best a finite difference can resolve there |
+| the same, `Circuit.simulate()` vs composing the two solvers by hand on the same circuit | **`6.8e-15`** |
+| `dL/dW` by hand vs finite differences, on a second circuit with an explicit RC load | `1.9e-09` |
+
+The first and third rows are different circuits with different losses, so their gradients
+(`29.196` and `-115016.8`) are not comparable with each other; each is checked against its own
+finite difference. See [differentiability.md](differentiability.md).
 
 Confirmed on a second, independent circuit at 1.52e-09.
 

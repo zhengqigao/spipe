@@ -90,30 +90,52 @@ normally need it.
 
 ## Measured accuracy
 
-Central finite differences over the **whole** chain, on a CMOS inverter driving a
-Mach–Zehnder modulator:
+Two different questions, answered by two different checks. Both use
+`examples/link_driver_mzm.sp` — a CMOS inverter driving a Mach–Zehnder modulator — with the
+loss `L = Σ_t photocurrent₁(t)²`.
 
-| | through `Circuit.simulate()` | composing the two solvers by hand |
-|---|---|---|
-| analytic | `29.19573838` | `-115016.7648` |
-| finite difference | `29.19573971` | `-115016.7645` |
-| **relative error** | **`4.6e-08`** | **`1.9e-09`** |
+**1. Is the gradient correct?** `dL/dW` from `Circuit.simulate()` against a central finite
+difference through the whole chain:
 
-A single finite-difference number can mislead, so the first column comes from a step-size
-sweep. The error falls as `h²` while truncation dominates, bottoms out at `h/W = 1e-4`,
-then *rises* as `1/h` once round-off in the transient solve takes over:
+| | `dL/dW` |
+|---|---|
+| analytic (adjoint) | `29.19573838` |
+| finite difference, best step | `29.19573971` |
+| **relative error** | **`4.6e-08`** |
+
+A single finite-difference number can mislead, so that comes from a step-size sweep. The
+error falls as `h²` while truncation dominates, bottoms out at `h/W = 1e-4`, then *rises* as
+`1/h` once round-off in the transient solve takes over:
 
 | step `h/W` | `1e-2` | `1e-3` | `1e-4` | `1e-5` | `1e-6` | `1e-7` |
 |---|---|---|---|---|---|---|
 | relative error | `1.9e-04` | `1.9e-06` | **`4.6e-08`** | `1.3e-07` | `6.4e-07` | `1.2e-05` |
 
 That V-shape is the signature of an exact analytic gradient: the disagreement is the finite
-difference's, not the adjoint's, and `4.6e-08` is simply as closely as a finite difference
-through an adaptive-step transient can check it.
+difference's, not the adjoint's, and `4.6e-08` is as closely as a finite difference through
+an adaptive-step transient can check it.
 
-Both routes are checked in `test/tb/tb12_end_to_end_grad.py`. The unified call is what you
-want in practice; composing `Netlist` and `Photonic` yourself is only useful when you need
-to insert something between the two domains.
+**2. Does the unified call change anything?** The same netlist, time grid and loss, run once
+through `Circuit.simulate()` and once by composing the two solvers by hand — the built-in
+circuit engine on the deck `Circuit` generates, then `Photonic` on the resulting drive:
+
+| | `Circuit.simulate()` | by hand | difference |
+|---|---|---|---|
+| modulator drive | | | `4.4e-16` |
+| loss `L` | `4.806542598606` | `4.806542598606` | `1.9e-16` |
+| `dL/dW` | `29.1957383816` | `29.1957383816` | **`6.8e-15`** |
+
+Machine precision: the unified call *is* the composition, with nothing approximated along
+the way. It is what you want in practice; composing `Netlist` and `Photonic` yourself is
+only useful when you need to insert something between the two domains.
+
+`test/tb/tb12_end_to_end_grad.py` checks both. It also checks the hand-composed route on a
+second, deliberately different circuit — the same inverter with an explicit RC load in place
+of the built-in `level3` model, over a 30 ns record — where the gradient is
+`dL/dW = -115016.7648` against a finite difference of `-115016.7645` (`1.9e-09`). That
+number is not comparable with `29.19573838`: it is a different circuit and a different loss.
+(An earlier version of this page put the two side by side as if they were one calculation
+done two ways.)
 
 ## Two limitations
 
