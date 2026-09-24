@@ -228,35 +228,114 @@ SPIPE checks for this rather than returning such numbers:
 Modulators *outside* a loop — driving a ring from outside, or feeding a delay line — are the
 case envelope mode is built for, and they are unaffected.
 
-## Assumption 3: the frequency axis is incoherent channels
+## Assumption 3: the points of the `.freq` grid are independent carriers
 
-The photodetector sums `|p(ω_n)|²` over the `.freq` grid. That is correct when those
-points are independent WDM carriers whose beat notes fall outside the detector bandwidth.
-It is **wrong** if you read the grid as the Fourier decomposition of one modulated signal,
-where the cross terms *are* the signal.
+The paper's detector model makes this assumption without saying so.
 
-**Made explicit by:** the `coherent=` option on the `pd` line, which squares the summed
-field and low-passes at the detector bandwidth `bw`, so the two regimes are one formula.
-The default preserves the incoherent behaviour.
+### What the assumption says
 
-`coherent=1` needs a transient time axis: the drive's, or on a circuit with no modulator, the
-`t` you pass to `Photonic(...).simulate(t)`. Without `bw=` there is no low-pass, and the
-detector returns the raw beat, sampled at your time step. It is aliased if the step is coarser
-than `1/(2·Δf)` for the carriers' spacing `Δf`. Give `bw=` for a real detector. Two properties
-are worth knowing before you read the output:
+With several points on the `.freq` grid, SPIPE solves the network at each one, and a detector
+adds up the power:
 
-- The reduction to the incoherent sum is **asymptotic, not exact**. A single-pole filter
-  rejects a beat note at `Δf` by roughly `bw / Δf`, so carriers 500× above the bandwidth
-  leave about 1.7 % ripple — measured at 2.5e-2 A on a 1.5 A photocurrent.
-- The low-pass starts from the **first sample**, and at `t = 0` every carrier is in phase
-  by construction, so the coherent photocurrent starts at its fully constructive value
-  (4.5 for three unit channels, against a steady state of 1.5) and decays toward the
-  incoherent value with the detector's own time constant `τ = 1/(2π·bw)`. Discard the
-  first few `τ`, or start the record earlier than the window you care about.
+```
+I(t) = Σ_n R(ω_n) · |A(ω_n, t)|²
+```
 
-`test/tb/tb03_oe_interface.py` pins both, and also pins that `Photonic` hands the detector
-its time axis at all: before that was wired up, `bw=` and `coherent=` were accepted, warned
-once, and silently fell back to an unfiltered incoherent sum.
+This treats each grid point as a **separate laser**, a WDM channel. The grid is the list of
+wavelengths present; it is not the spectrum of a modulated signal. The modulation lives on the
+time axis, as the drive.
+
+When two carriers reach one detector, the true photocurrent is the square of their *summed
+field*, and squaring a sum gives more than the sum of squares:
+
+```
+|A_1·e^{jω_1 t} + A_2·e^{jω_2 t}|²  =  |A_1|² + |A_2|²  +  2·|A_1·A_2|·cos((ω_1 − ω_2)·t + phase)
+```
+
+The first two terms are what SPIPE adds up. The last is the **beat**, which oscillates at
+the carrier spacing.
+
+Dropping the beat term is correct in two common cases:
+- **The beat is far faster than the detector.** WDM channels 50–100 GHz apart on a 10 GHz
+  receiver: the detector cannot follow the beat, so it averages it away.
+- **The lasers are independent.** Their relative phase drifts at random, so the beat has no
+  fixed shape and averages to zero.
+
+### What goes wrong when it does not hold
+
+When the carriers are phase-locked and closer together than the detector's bandwidth, the
+beat is not a small correction: it *is* the output. Examples are two lasers beaten on a fast
+photodiode to make a microwave tone, lines of a frequency comb, and a coherent receiver mixing
+a signal with a local oscillator. The paper's detector also had infinite bandwidth, so it had no
+way to express which beats a real detector passes and which it filters out.
+
+The figure puts two unit carriers, 10 GHz apart, on one detector.
+
+![Photocurrent of two carriers 10 GHz apart: incoherent sum versus coherent detection](figures/coherent_detection.png)
+
+- **(a) A 50 GHz detector.** The true current swings between 0 and 4 at 10 GHz: this is how a
+  microwave tone is generated optically. The incoherent sum (red) reports a constant 2 and
+  misses the signal entirely.
+- **(b) A 0.5 GHz detector.** The beat is 20 times faster than the detector, so the current
+  settles to 2 with only a small ripple left. Here the incoherent sum is the right answer.
+- **(c) How much beat survives,** as a function of carrier spacing over detector bandwidth.
+  The two regimes are the two ends of one curve, `1/√(1 + (Δf/bw)²)`, which falls as roughly
+  `bw/Δf` once the spacing is well above the bandwidth.
+
+### What SPIPE now does about it
+
+**1. A detector bandwidth: `bw=` on the `pd` line.** The photocurrent passes through a single
+pole at `bw`, with time constant `τ = 1/(2π·bw)`, discretised exactly for a signal held
+constant over each time step. The detector noise (shot and thermal, or `inoise=`) passes through
+the same pole. Without `bw=` the detector keeps the original infinite bandwidth and adds no
+noise. [Photodetector bandwidth and noise](netlist.md#photodetector-bandwidth-and-noise) has
+the details.
+
+**2. Coherent detection: `coherent=1` on the `pd` line.** The carriers are added *in field*,
+each with its optical phase relative to the centre of the grid, and only then squared:
+
+```
+I(t) = LPF_bw { | Σ_n √R(ω_n) · A(ω_n, t) · e^{−j(ω_n − ω_ref)·t} |² }        ω_ref = mean of the grid
+```
+
+This is one formula for both regimes. The square keeps every beat, and the low-pass at `bw`
+decides which survive: in the figure, (a) and (b) are the same setting with different `bw`.
+When all beats are far above `bw` it reduces to the incoherent sum, which (c) shows is
+approached as `bw/Δf`: at `Δf = 500·bw`, 0.2 % of the beat remains.
+
+**3. The default is unchanged.** `coherent=0` is the incoherent sum. Without `bw=` it
+reproduces the original detector exactly (a deprecated `std=` term now draws from SPIPE's
+seeded generator, so its random numbers differ). It needs no time axis, and it is the right choice
+whenever you know the beats lie well outside the detector bandwidth.
+
+**4. The detector is given the time axis, and says so when it cannot be.** `bw=` and
+`coherent=1` both need the time samples, which `Photonic` now passes to the detector: the
+drive's time axis, or the `t` of `Photonic(...).simulate(t)` on a circuit with no modulator.
+During development they were once accepted, warned about only once, and then silently fell
+back to an unfiltered incoherent sum, because the time axis never arrived. That path is now
+pinned by `test/tb/tb03_oe_interface.py`. Without a time axis, SPIPE warns and uses the
+incoherent sum.
+
+| | the original detector | SPIPE now |
+|---|---|---|
+| detector bandwidth | infinite | `bw=`: a single pole, discretised exactly |
+| beats between carriers | always dropped | `coherent=1` keeps them, and the `bw` low-pass decides which survive |
+| detector noise | a relative `std=` (deprecated, still accepted) | shot and thermal noise (or `inoise=`) through the same pole, seeded and reproducible |
+| default behaviour | incoherent sum | unchanged: `coherent=0`, identical to the original without `bw=` |
+
+### Three things to know before reading a `coherent=1` result
+
+- **It starts from a fully in-phase moment.** At `t = 0` every carrier is in phase, so the
+  current starts at its largest value (4 in panel (b), against a final 2) and settles with
+  the detector's `τ`. Discard the first few `τ`, or start the record earlier than the window
+  you care about.
+- **The carriers are treated as phase-locked.** Their relative phase is fixed by the circuit.
+  Laser phase noise and linewidth are not modelled, so two free-running lasers give a clean
+  beat that a real measurement would smear out.
+- **The time step must resolve the beat.** With `N` carriers spaced `Δf`, beats reach
+  `(N − 1)·Δf`, and the samples alias them unless `dt < 1/(2·(N − 1)·Δf)`. SPIPE does not
+  check this. Without `bw=` there is no low-pass, and the detector returns the raw beat at
+  each sample.
 
 ## A worked demonstration of the boundary
 
