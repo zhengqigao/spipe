@@ -57,7 +57,10 @@ modulator changes"*.
 
 Envelope mode requires a `.freq` grid wide enough (`band ≫ 1/dt`) and fine enough
 (`1/(2·df) ≫ τ_max`); it warns with concrete numbers when either is violated.
-**It does not currently support gradients** — use `mode='quasistatic'` for the adjoint.
+It is differentiable with respect to the **modulator drive**: `backward()` through an
+envelope-mode result fills in `drive.grad`, matching finite differences to `4e-09`. It is
+not yet differentiable with respect to *passive* device parameters (a waveguide length,
+a coupler angle) — use `mode='quasistatic'` for those.
 
 ## Assumption 3: the frequency axis is incoherent channels
 

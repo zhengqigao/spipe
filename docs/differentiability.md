@@ -118,5 +118,7 @@ to insert something between the two domains.
 
 - Use the **`native`** backend. Xyce's device derivatives are numerical and do not hold up
   on MOSFET widths; HSPICE re-runs finite differences. See [backends.md](backends.md).
-- `mode='envelope'` (see [scope.md](scope.md)) does **not** currently support gradients.
-  Use the default `mode='quasistatic'` for the adjoint.
+- `mode='envelope'` (see [scope.md](scope.md)) is differentiable with respect to the
+  **modulator drive** — matching finite differences to `4e-09` — but not yet with respect to
+  passive device parameters such as a waveguide length. Use the default
+  `mode='quasistatic'` for those.

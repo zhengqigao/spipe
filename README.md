@@ -193,7 +193,7 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**353 checks, and the exit status is 0 only if every one passed**, so it drops straight
+**360 checks, and the exit status is 0 only if every one passed**, so it drops straight
 into CI. `--quick` runs the fast ~230 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce or Lumerical INTERCONNECT
 **skip themselves** when that tool is not installed, rather than failing — so on a bare
@@ -291,20 +291,24 @@ The full discussion, including two further assumptions worth knowing about:
 Honest about what is not done yet. These are open work items, roughly in the order we think
 they matter; nothing here is a promise of a date.
 
-**1. An open-source PDK, end to end.** SPIPE's paper examples use the SkyWater SKY130
-models, which are third-party and have to be fetched separately, and whose public form does
-not parse in HSPICE. We are evaluating the **IHP SG13G2 Open PDK** — a genuinely open
-130 nm BiCMOS process with an electronic–photonic offering — so that a new user can
-reproduce a full electronic–photonic result with nothing but `pip install`. The open
-questions are which simulator dialects its models ship in, and whether the built-in engine
-(which today knows R, L, C, sources, diodes, BJTs and level-1 MOSFETs) can consume them at
-all, or whether that route needs Xyce.
+**1. An open-source PDK for the electronics.** The paper's examples use the SkyWater SKY130
+models, which are third-party and whose public form does not parse in HSPICE. The **IHP
+SG13G2 Open PDK** (130 nm SiGe BiCMOS, Apache-2.0) is a better fit, and we have checked it:
+its transistor models run in both Xyce and HSPICE after a small, mechanical rewrite, and
+Xyce returns analytic sensitivities for them that agree with finite differences to 2e-5 —
+so `d(optical)/dW` on a real foundry transistor is within reach. Two honest limits. The
+built-in engine cannot run them (they are PSP and VBIC compact models, thousands of lines
+each); that route stays Xyce or HSPICE. And the open PDK ships **no photonic models** —
+IHP's photonic processes are available only under NDA — so the optics would still come from
+SPIPE's own device library.
 
-**2. Gradients in envelope mode.** `mode='envelope'` is what lifts the zero-optical-memory
-assumption (see [docs/scope.md](docs/scope.md)), and it is exactly the regime — high-Q
-resonators, delay-set oscillation — where you would most want to optimise a design. It does
-not currently support the adjoint, so today you have to choose between optical memory and
-gradients. Removing that choice is the single most valuable thing on this list.
+**2. Gradients in envelope mode — done for the drive.** `mode='envelope'` lifts the
+zero-optical-memory assumption (see [docs/scope.md](docs/scope.md)), which is exactly the
+regime — resonators, delay-set oscillation — where you most want to optimise. It is now
+differentiable with respect to the modulator drive, matching finite differences to 4e-09.
+What remains is differentiating with respect to *passive* parameters (a waveguide length, a
+coupler angle) in envelope mode, which needs a differentiable path through the passive
+network's transfer function.
 
 **3. A sparser, cheaper photonic solve.** The scattering-matrix system `A x = b` is
 assembled explicitly. `A` is very sparse — each device only couples its own ports — so most

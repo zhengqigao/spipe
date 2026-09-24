@@ -8,7 +8,7 @@ python test/run_all.py          # single PASS/FAIL verdict
 python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 353 checks, 11 benches
+## Summary: 360 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
@@ -21,8 +21,8 @@ python test/run_all.py --quick  # the fast subset
 | `tb07_fixedpoint` | convergence, divergence, bistability | 29 |
 | `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
 | `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 57 |
-| `tb11_envelope_P3` | optical memory / envelope propagation | 9 |
-| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 20 |
+| `tb11_envelope_P3` | optical memory / envelope propagation, and its gradients | 13 |
+| `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 23 |
 
 `tb05` needs Xyce or HSPICE and is skipped without them; every other bench runs on PyTorch
 alone. `tb08` compares against a *stored* INTERCONNECT result, so it needs no Lumerical

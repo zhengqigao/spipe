@@ -200,6 +200,74 @@ def build():
     tb.lt('P3.default_is_quasistatic', float((d1 - d2).abs().max()), 1e-15,
           'omitting mode= must be exactly the historical behaviour')
 
+    # ---------------- gradients through mode='envelope' --------------------------------
+    # Device._param_wrap stores every attribute as a torch.nn.Parameter, which builds a NEW
+    # leaf and discards the drive's history. Envelope mode is plain autograd, so its loss had
+    # a real grad_fn, backward() completed without error, and drive.grad was silently None.
+    # These checks drive a genuinely non-adiabatic circuit (a 4 ps delay sampled at 2 ps) so
+    # envelope mode is really doing something the quasi-static path cannot.
+    import warnings as _w
+    from spipe.photonic.photonic import Photonic as _Ph
+    sp.config['quasistatic_check'] = False
+    _net = [l + "\n" for l in [
+        ".mode neff=2.35 ng=4.0 wl=1550e-9",
+        ".freq 192.6e12 193.6e12 65",
+        ".source 1.0@a1 0.0@a2",
+        "mzm0 a1 a2 b1 b2 vdrv level3 vpi=2.0 vbias=0.0 il=0.0",
+        "wg0 b1 c1 l=300e-6",
+        "pd1 c1 vo1 level1 r0=1.0",
+        "pd2 b2 vo2 level1 r0=1.0"]]
+    _T = 48
+    _t = torch.arange(_T, dtype=torch.float64) * 2e-12
+    _base = (1.0 + 0.8 * torch.sin(2 * math.pi * _t / (_T * 2e-12) * 3)).reshape(-1, 1)
+    _wts = torch.linspace(0.5, 1.5, _T, dtype=torch.float64)
+
+    def _env_loss(drive):
+        with _w.catch_warnings():
+            _w.simplefilter('ignore')
+            out, _, _ = _Ph(_net).simulate(_t, drive, mode='envelope')
+        return (_wts * out[:, 0]).sum()
+
+    try:
+        _d = _base.clone().requires_grad_(True)
+        _loss = _env_loss(_d)
+        _loss.backward()
+        tb.ok('ENV.grad_reaches_drive', _d.grad is not None,
+              'backward() through mode=envelope must populate drive.grad; it used to complete '
+              'without error and leave it None')
+        if _d.grad is not None:
+            _worst = 0.0
+            for _k in (0, 15, 31, 47):
+                _h = 1e-4
+                _p = _base.clone(); _p[_k, 0] += _h
+                _m = _base.clone(); _m[_k, 0] -= _h
+                with torch.no_grad():
+                    _fd = (float(_env_loss(_p)) - float(_env_loss(_m))) / (2 * _h)
+                _worst = max(_worst, abs(float(_d.grad[_k, 0]) - _fd) / max(abs(_fd), 1e-30))
+            tb.lt('ENV.grad_matches_fd', _worst, 1e-6,
+                  f'analytic d(loss)/d(drive) vs central finite differences at 4 instants '
+                  f'(worst relative error)')
+
+        # The forward answer must not depend on whether a graph was requested.
+        with torch.no_grad():
+            _plain = _Ph(_net).simulate(_t, _base, mode='envelope')[0]
+        _graph = _Ph(_net).simulate(_t, _base.clone().requires_grad_(True), mode='envelope')[0]
+        tb.ok('ENV.forward_unchanged_by_grad', torch.equal(_plain, _graph.detach()),
+              f'max |with graph - without| = {float((_plain - _graph.detach()).abs().max()):.3e}')
+
+        # The envelope model cache is keyed by VALUE. Two equal drives on different graphs
+        # must not share a cached model, or the second backward attaches to the first graph.
+        _ph = _Ph(_net)
+        with _w.catch_warnings():
+            _w.simplefilter('ignore')
+            _ph.simulate(_t, _base.clone(), mode='envelope')          # populate the cache
+            _d2 = _base.clone().requires_grad_(True)
+            (_wts * _ph.simulate(_t, _d2, mode='envelope')[0][:, 0]).sum().backward()
+        tb.ok('ENV.cache_does_not_steal_graph', _d2.grad is not None,
+              'a value-equal cached drive must not swallow the gradient of a new one')
+    except Exception as e:
+        tb.ok('ENV.grad_reaches_drive', False, f"{e!r}")
+
     return tb
 
 

@@ -160,8 +160,18 @@ import torch
 
 from spipe import config
 
+from .model.base import _has_fc, as_complex, as_real
 from .photonic import (Simulate, _HAS_SPARSE, _entry_is_active, _model_class, _model_info,
                        _solver_backend, inward_map, outward_map)
+
+if _has_fc:  # pragma: no cover - mirrors the import cascade in model/base.py
+    try:
+        from torch.func import functional_call
+    except ImportError:                                        # torch < 2.0
+        try:
+            from torch.nn.utils.stateless import functional_call
+        except ImportError:
+            from torch.nn.utils._stateless import functional_call
 
 if _HAS_SPARSE:  # pragma: no cover - mirrors the guard in photonic.py
     import numpy as _np
@@ -212,6 +222,38 @@ EDGE_WINDOW_FACTOR = 4
 TAP_TOL = 1e-12
 
 # --------------------------------------------------------------------------------------- assembly
+
+def _scatter_with_graph(instance, act: Optional[torch.Tensor]) -> torch.Tensor:
+    """``instance.transfer(None)``, but with the drive re-bound so that autograd survives.
+
+    :class:`~spipe.photonic.model.base.Device` stores every attribute through ``_param_wrap``,
+    which wraps a tensor in ``torch.nn.Parameter``.  That constructor *makes a new leaf*: the
+    stored ``params['act']`` has the values of ``param_value`` but none of its history, so the
+    modulator scatter matrix comes out with ``requires_grad=True`` (Parameters require grad) and
+    yet is **disconnected** from the drive.  Backward then runs without complaint and leaves
+    ``param_value.grad`` at ``None``.
+
+    The quasi-static path never notices, because :class:`~spipe.photonic.photonic.Simulate` is a
+    custom :class:`torch.autograd.Function` whose backward differentiates the device models
+    explicitly (``Device.transfer(vari_set)``) instead of relying on the graph.  Envelope mode is
+    plain autograd, so the drive has to be put back.
+
+    ``functional_call`` substitutes the live tensor for the stored Parameter for the duration of
+    one forward, without mutating the module -- the same mechanism :meth:`Device._autodiff`
+    already uses.
+    """
+    if act is None or not isinstance(act, torch.Tensor) or not act.requires_grad:
+        return instance.transfer(None)
+    if not _has_fc:  # pragma: no cover - only on torch too old to have functional_call
+        warnings.warn(
+            "mode='envelope' cannot carry gradients on this PyTorch build: torch.func."
+            "functional_call is unavailable, so the drive cannot be re-bound past the "
+            "nn.Parameter that Device.__init__ wraps it in. The result is correct but carries no "
+            "autograd graph; use mode='quasistatic' for the adjoint.", stacklevel=3)
+        return instance.transfer(None)
+    out, _ = functional_call(instance, {'params.act': as_real(act).to(config['device'])}, None)
+    return as_complex(out)
+
 
 def _match_kv(name: str, model_table: Dict) -> Tuple[Optional[str], Optional[Dict]]:
     """``(key, entry)`` of the first model in ``model_table`` that ``name`` starts with.
@@ -328,7 +370,7 @@ def _assemble(photonic, t_value: torch.Tensor, param_value: Optional[torch.Tenso
         out_cols = photonic.outward_node[ele]['ln'] + photonic.outward_node[ele]['rn']
         num_constraint = len(in_cols)
 
-        scatter = instance.transfer(None)
+        scatter = _scatter_with_graph(instance, kwargs.get('act'))
         if scatter.ndim == 3:
             scatter = scatter.unsqueeze(0)
 
@@ -933,11 +975,15 @@ def simulate_envelope(photonic, t_value: Optional[torch.Tensor],
     the ``.prob`` dictionary.  Falls back to that path verbatim whenever the circuit has no optical
     memory the transient grid could represent, so the two modes then agree bit for bit.
     """
+    # `need_grads` is forced on whenever the drive carries a graph: mode='envelope' is
+    # differentiable through plain autograd, and it would be a trap for the fall-back branches --
+    # which hand the run to the quasi-static adjoint -- to be the only ones that demand the flag.
+    grad_wanted = photonic.need_grads or (param_value is not None and param_value.requires_grad)
     delegate = lambda: Simulate.apply(
         t_value, param_value, photonic.omega, photonic.node_has_ele, photonic.srce_node,
         photonic.node2ind, photonic.circuit_element, photonic.mod_element, photonic.mode_info,
         photonic.occur_order, (photonic.dout_node, photonic.middle_node), photonic.inward_node,
-        photonic.outward_node, photonic.need_grads)
+        photonic.outward_node, grad_wanted)
 
     if t_value is None or param_value is None or len(t_value) < 2:
         # nothing varies in time: the steady-state solve *is* the envelope answer
@@ -955,25 +1001,26 @@ def simulate_envelope(photonic, t_value: Optional[torch.Tensor],
             f"{float(step.min()):.6g} s to {float(step.max()):.6g} s (mean {dt:.6g} s), which "
             f"varies by more than {jitter:.3g} of the step.")
 
-    if photonic.need_grads:
-        warnings.warn(
-            "mode='envelope' does not provide gradients (SPEC-P3 covers the forward model only); "
-            "the returned tensors carry no autograd graph. Use mode='quasistatic' for the adjoint.",
-            stacklevel=3)
-
     # The model holds the modulator scatter matrices as well as the passive transfers, so it is only
     # reusable for the *same* drive.  The drive is compared by value, not by identity: a caller that
     # rebuilds `param_value` every iteration (the electronic/photonic fixed point does) would
     # otherwise hand back a tensor at a recycled address and silently get the previous answer.
+    #
+    # The cache is bypassed entirely when the drive carries an autograd graph.  Two tensors that
+    # are equal *by value* can sit on completely different graphs, so handing back a cached model
+    # would attach the backward pass to the previous iteration's drive and silently leave this
+    # one's `.grad` at None -- exactly the failure the cache is meant to avoid on the forward side.
+    differentiable = bool(param_value.requires_grad)
     cache = getattr(photonic, '_envelope_cache', None)
-    if (cache is not None and cache[0] == dt
+    if (not differentiable and cache is not None and cache[0] == dt
             and cache[1].shape == t_value.shape and torch.equal(cache[1], t_value)
             and cache[2].shape == param_value.shape and torch.equal(cache[2], param_value)):
         model = cache[3]
     else:
         model = EnvelopeModel(photonic, t_value, param_value, dt)
-        photonic._envelope_cache = (dt, t_value.detach().clone(),
-                                    param_value.detach().clone(), model)
+        if not differentiable:
+            photonic._envelope_cache = (dt, t_value.detach().clone(),
+                                        param_value.detach().clone(), model)
 
     if model.adiabatic:
         # Nothing varies in time, or every impulse response has collapsed to a single tap holding
