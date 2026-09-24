@@ -296,6 +296,38 @@ def build():
         tb.ok('E2.fixed_point_dtype_random_guess', False, f"{e!r}")
 
     # ------------------------------------------------------------------
+    # The documented check: dL/dW from Circuit.simulate() against numerical
+    # differentiation -- a central finite difference that re-runs the whole
+    # co-simulation. docs/differentiability.md quotes 4.6e-08 at h/W = 1e-4,
+    # the bottom of the step-size sweep; the bound leaves room for platform
+    # round-off while still catching any real gradient error by orders of
+    # magnitude.
+    # ------------------------------------------------------------------
+    try:
+        from spipe.core.core import Circuit
+        link = os.path.join(REPO, 'examples', 'link_driver_mzm.sp')
+        ck = Circuit(link, spice_exe='native')
+        w = ck.param('mn1', 'W')
+        _, _, pc, _, _ = ck.simulate()
+        (pc[:, 0] ** 2).sum().backward()
+        g = float(w.grad)
+        w0 = float(w.detach())
+        h = w0 * 1e-4
+
+        def _loss_at(value):
+            c = Circuit(link, spice_exe='native')
+            with torch.no_grad():
+                c.param('mn1', 'W').copy_(torch.tensor(value, dtype=torch.float64))
+                return float((c.simulate()[2][:, 0] ** 2).sum())
+
+        fd = (_loss_at(w0 + h) - _loss_at(w0 - h)) / (2 * h)
+        tb.lt('E2.circuit_grad_vs_finite_difference', abs(g - fd) / abs(fd), 1e-6,
+              f"Circuit.simulate(): analytic dL/dW = {g:.8f}, central FD = {fd:.8f} "
+              f"(h/W = 1e-4)")
+    except Exception as e:
+        tb.ok('E2.circuit_grad_vs_finite_difference', False, f"{e!r}")
+
+    # ------------------------------------------------------------------
     # Like for like: the unified call must BE the composition. Same netlist, same
     # grid, same loss, once through Circuit.simulate() and once by driving the
     # native engine on the deck Circuit generated, then Photonic on its drive.

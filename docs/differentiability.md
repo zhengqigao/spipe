@@ -6,7 +6,7 @@ explains how, and why it does not cost what you might expect.
 
 The netlist side of it — the `.sensparam` card — is defined in [netlist.md](netlist.md).
 
-## Three pieces compose
+## How the gradient is computed
 
 **1. The photonics.** The optical network is a linear system `A x = b`, where `x` holds two
 unknowns per port (one wave in each direction). Differentiating it gives
@@ -90,73 +90,32 @@ normally need it.
 
 ## Measured accuracy
 
-Two different questions, answered by two different checks. Both use
-`examples/link_driver_mzm.sp` — a CMOS inverter driving a Mach–Zehnder modulator — with the
-loss `L = Σ_t photocurrent₁(t)²`.
-
-**1. Is the gradient correct?** `dL/dW` from `Circuit.simulate()` against a central finite
-difference through the whole chain:
+The gradient is checked against **numerical differentiation**: a central finite difference
+that re-runs the whole co-simulation with `W` nudged up and then down,
+`(L(W+h) − L(W−h)) / 2h`. It uses `examples/link_driver_mzm.sp` — a CMOS inverter driving a
+Mach–Zehnder modulator — with the loss `L = Σ_t photocurrent₁(t)²`:
 
 | | `dL/dW` |
 |---|---|
-| analytic (adjoint) | `29.19573838` |
+| analytic, from `Circuit.simulate()` | `29.19573838` |
 | finite difference, best step | `29.19573971` |
 | **relative error** | **`4.6e-08`** |
 
-A single finite-difference number can mislead, so that comes from a step-size sweep. The
-error falls as `h²` while truncation dominates, bottoms out at `h/W = 1e-4`, then *rises* as
-`1/h` once round-off in the transient solve takes over:
+A single finite-difference number can mislead, because the step `h` trades two errors
+against each other, so the value above comes from a sweep over `h`:
 
 | step `h/W` | `1e-2` | `1e-3` | `1e-4` | `1e-5` | `1e-6` | `1e-7` |
 |---|---|---|---|---|---|---|
 | relative error | `1.9e-04` | `1.9e-06` | **`4.6e-08`** | `1.3e-07` | `6.4e-07` | `1.2e-05` |
 
-That V-shape is the signature of an exact analytic gradient: the disagreement is the finite
-difference's, not the adjoint's, and `4.6e-08` is as closely as a finite difference through
-an adaptive-step transient can check it.
+With a large step the finite difference is itself inaccurate (its error falls as `h²`).
+With a small step it drowns in round-off from the transient solve (its error grows as
+`1/h`). The analytic gradient does not change with `h` at all. That V-shape is the signature
+of an exact analytic gradient: the remaining disagreement belongs to the finite difference,
+and `4.6e-08` is as closely as a finite difference through an adaptive-step transient can
+check it.
 
-**2. Does the unified call change anything?** SPIPE is two solvers — a circuit simulator
-for the `.electronic` section and a photonic solver for the `.photonic` section.
-`Circuit.simulate()` coordinates them for you. "By hand" means calling the two yourself, one
-after the other:
-
-```python
-# The unified call: one function does everything.
-ckt = Circuit("examples/link_driver_mzm.sp", spice_exe="native")
-_, _, photocurrent, drive, _ = ckt.simulate()
-
-# By hand: the same two solvers, called in sequence.
-res   = Netlist(electronic_deck).tran(tstep, tstop)          # 1. circuit transient
-drive = res.v("vdrv")                                         # 2. modulator voltage (resampled onto t)
-photocurrent, _, _ = Photonic(photonic_lines).simulate(t, drive)   # 3. the optics
-```
-
-`Circuit.simulate()` does more than that sequence. It inserts the electrical load of each
-modulator and detector into the circuit, so `electronic_deck` above has to be the deck
-`Circuit` builds. It also feeds the photocurrents back into the circuit and iterates until
-the two domains agree, and it differentiates that converged answer with the implicit function
-theorem. On this circuit the photocurrent never reaches the modulator, so one pass in each
-direction is the whole answer and the two routes can be compared directly. If that extra
-machinery introduced any error, they would disagree. Same netlist, time grid and loss:
-
-| | `Circuit.simulate()` | by hand | difference |
-|---|---|---|---|
-| modulator drive — a waveform, 40 time points | swings −0.004 V to 2.998 V | same | largest at any point: `4.4e-16` V (absolute) |
-| loss `L` | `4.806542598606` | `4.806542598606` | `1.9e-16` (relative) |
-| `dL/dW` | `29.1957383816` | `29.1957383816` | **`6.8e-15`** (relative) |
-
-Machine precision: the unified call *is* the composition, with nothing approximated along
-the way. Use `Circuit.simulate()` in practice. It is the only route that is correct when a
-photocurrent *does* feed back into a modulator. Composing `Netlist` and `Photonic` yourself is
-only useful when you need to insert something between the two domains.
-
-`test/tb/tb12_end_to_end_grad.py` checks both. It also checks the hand-composed route on a
-second, deliberately different circuit — the same inverter with an explicit RC load in place
-of the built-in `level3` model, over a 30 ns record — where the gradient is
-`dL/dW = -115016.7648` against a finite difference of `-115016.7645` (`1.9e-09`). That
-number is not comparable with `29.19573838`: it is a different circuit and a different loss.
-(An earlier version of this page put the two side by side as if they were one calculation
-done two ways.)
+`test/tb/tb12_end_to_end_grad.py` repeats this comparison on every run.
 
 ## Two limitations
 
