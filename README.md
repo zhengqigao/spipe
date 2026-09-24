@@ -310,26 +310,27 @@ What remains is differentiating with respect to *passive* parameters (a waveguid
 coupler angle) in envelope mode, which needs a differentiable path through the passive
 network's transfer function.
 
-**3. A sparser, cheaper photonic solve.** The scattering-matrix system `A x = b` is
-assembled explicitly. `A` is very sparse — each device only couples its own ports — so most
-of what is stored and factorised is zeros. Worth evaluating: sparse assembly with a sparse
-direct solve, and a matrix-free iterative solve that never forms `A` at all. The constraint
-is that the adjoint currently reuses the forward factorisation, so anything matrix-free has
-to pay for its gradients differently. Whether that trade is worth it is an empirical
-question we have not yet answered.
+**3. A faster photonic solve — aimed at the right place.** The scattering-matrix system
+`A x = b` is already assembled sparse and solved with a sparse LU once it is large, and the
+adjoint reuses that factorisation, so it is close to the best available *solver*: a
+matrix-free iterative solve was measured 100–600× slower, because a low-loss mesh's round
+trip gain sits near 1. The time is spent elsewhere. Profiling shows 40–99 % of a forward
+solve is the Python loop that builds each device, and 90–96 % of a backward pass is the
+per-modulator Jacobian. Batching both is the real speed-up.
 
-**4. GPU, honestly measured.** SPIPE is written in PyTorch partly so it can run on a GPU,
-but we have no benchmark showing that it actually helps, and a circuit that is many small
-per-frequency solves may well be slower on a GPU than on a CPU. The work is to measure it
-properly across problem sizes, fix whatever device handling is wrong, and then say plainly
-where the crossover is — including saying "use the CPU" if that is the answer.
+**4. GPU.** The photonic solve runs correctly on a GPU, and gradients now do too. But
+measured end to end it is *slower* than the CPU (0.26–0.65×), because that same
+one-device-at-a-time assembly loop launches many tiny GPU operations. Batching the assembly
+(item 3) is what would let a GPU pay off; we will publish measurements on a modern GPU
+rather than a prediction.
 
-**5. Choosing your precision.** `spipe.config` already carries `real_dtype` and
-`complex_dtype`, and the suite runs in `complex128`. Making `complex64` a properly supported,
-tested option would roughly halve memory and help on GPUs, at an accuracy cost that should
-be stated rather than discovered. (A caution from experience: a mismatch between the two
-dtypes once silently destroyed precision while everything appeared to work, so this needs
-real tests, not a config flag.)
+**5. Choosing your precision.** `spipe.config` already accepts `complex64`, which halves the
+solve's memory at an accuracy cost of about 1e-3 — most of it from single-precision phase
+arithmetic in long waveguides, not the solve. Keeping the device models in double and only
+the solve in single ("mixed") measured 9e-8. The plan is one `precision` setting instead of
+two independent dtypes, because a mismatched pair currently runs silently at reduced
+accuracy. (`complex32` is not possible: PyTorch has no half-precision complex linear
+algebra.)
 
 Contributions and bug reports are welcome. If something in here is wrong, or a number does
 not reproduce, please open an issue — `test/run_all.py` is the right thing to run first.
