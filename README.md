@@ -200,13 +200,13 @@ nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INT
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:
 
-| | measured |
+| check | measured |
 |---|---|
 | energy conservation on a lossless circuit **with an optical loop** | error **exactly 0** |
 | a photonic mesh vs **Lumerical INTERCONNECT** | agrees to `5e-7`, the limit of INTERCONNECT's own output precision |
 | the built-in circuit engine vs closed-form solutions | to machine precision |
 | the built-in engine vs **HSPICE and Xyce** on identical netlists | within how much those two disagree with each other |
-| `d|E|²/dW` vs finite differences over the whole chain | `1.9e-09` |
+| gradient of the optical output with respect to a transistor width, vs finite differences over the whole chain | agrees to `4.6e-08`, the limit finite differences can resolve |
 
 The numbers and how they were taken: [docs/validation.md](docs/validation.md).
 
