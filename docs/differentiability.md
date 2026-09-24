@@ -64,14 +64,15 @@ SPIPE **raises** rather than returning a large, meaningless number.
 
 ## Turning gradients on and off
 
-There is one `simulate()`. It decides for itself:
+There is one `simulate()`, and `.sensparam` is the switch. The graph costs about 1.65× the
+plain runtime, so `simulate()` builds it only when something needs it:
 
 | situation | what happens |
 |---|---|
 | no `.sensparam` in the netlist | plain run, no graph |
-| `.sensparam` declared but `requires_grad=False` | plain run, no graph |
+| `.sensparam` declared (the parameter already requires grad) | **builds the graph** |
+| you switched off **every** declared parameter with `ckt.param(...).requires_grad_(False)` — optional | plain run, no graph |
 | called inside `torch.no_grad()` | plain run, no graph |
-| a declared parameter requires grad | **builds the graph**, about 1.65× the plain runtime |
 
 The returned values are the same either way — measured to agree to `5.6e-16` on
 `examples/link_driver_mzm.sp`, i.e. machine precision. The differentiable path solves the

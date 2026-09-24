@@ -484,8 +484,7 @@ class Electronic(object):
         Mirrors :meth:`spipe.electronic.native.Netlist.param`, so the same code works
         whichever back end is driving the circuit::
 
-            w = circuit.e_circuit.param('mn1', 'W')
-            w.requires_grad_(True)          # already true for a '.sensparam' entry
+            w = circuit.e_circuit.param('mn1', 'W')   # already requires grad: .sensparam did that
             ...                             # simulate, build an objective, backward()
             w.grad                          # d(objective) / dW, in metres^-1
 

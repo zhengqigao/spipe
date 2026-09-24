@@ -148,9 +148,10 @@ w.grad                                   # d(loss)/dW = 29.19573838
 That is the entire program. Checked against finite differences over the whole chain, the
 gradient agrees to **4.6e-08** — as closely as a finite difference through a transient simulation can check it (the sweep is in [docs/differentiability.md](docs/differentiability.md)).
 
-There is only **one** simulation call. `simulate()` follows the usual PyTorch convention:
-gradients cost nothing unless you ask for them, and you ask for them by declaring a
-parameter and leaving `requires_grad` on. The returned values are the same either way.
+There is only **one** simulation call, and **`.sensparam` is the only switch**. Every
+parameter it names comes back from `ckt.param(...)` already marked `requires_grad=True`, so
+there is nothing to set in Python. Without a `.sensparam` line, `simulate()` runs an ordinary
+simulation and builds no graph. The returned values are the same either way.
 
 The mechanism, and why it stays cheap even with feedback, is in
 [docs/differentiability.md](docs/differentiability.md).
