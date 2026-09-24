@@ -45,6 +45,9 @@ at exactly those nodes — there is no explicit "connect" statement.
 The **instance name's prefix picks the model**: a line starting `mzm0` instantiates an
 `mzm`, a line starting `pd1` instantiates a photodetector. Names are otherwise free.
 
+The equations each device computes, with a figure and a worked example for each, are in
+[photonic_device.md](photonic_device.md).
+
 Passive devices:
 
 | prefix | ports (in, out) | what it is | parameters |

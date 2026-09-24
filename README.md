@@ -268,6 +268,7 @@ The full discussion, including two further assumptions worth knowing about:
 | | |
 |---|---|
 | [docs/netlist.md](docs/netlist.md) | every directive and device, defined |
+| [docs/photonic_device.md](docs/photonic_device.md) | every photonic device: figure, parameters, equations, a worked example |
 | [docs/differentiability.md](docs/differentiability.md) | how the gradients are computed |
 | [docs/backends.md](docs/backends.md) | choosing an electronic engine, and their traps |
 | [docs/scope.md](docs/scope.md) | the physics assumptions and where they bind |
