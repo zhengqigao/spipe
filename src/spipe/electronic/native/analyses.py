@@ -123,6 +123,29 @@ def solve_op(sys: MNASystem, opts: NewtonOptions, t=0.0, dc=True, x0=None,
     return OpRecord(x.detach(), t, dc, opts.gmin, pinned, iters)
 
 
+def _tiny_capacitance_hint(sys: MNASystem, x, t, opts) -> str:
+    """Name the nodes whose only capacitance is negligible, a common cause of Newton failure.
+
+    A transistor-driven node with almost no capacitance (a 1 aF "open circuit" load and a
+    MOSFET model without CGSO/CGDO/TOX) leaves Newton nothing to damp its step between the
+    device's operating regions, and it can fail where HSPICE and Xyce, with their own
+    safeguards, get through.
+    """
+    try:
+        ev = sys.eval(x, t, need_jac=True, limiting=False, gmin=opts.gmin)
+        cap = ev["Jq"].diagonal()[:sys.n_nodes].abs()
+        tiny = [sys.unknown_name(i) for i in range(sys.n_nodes)
+                if 0.0 < float(cap[i]) < 1e-16]
+    except Exception:                                    # a hint must never mask the error
+        return ""
+    if not tiny:
+        return ""
+    return ("\nThese nodes have almost no capacitance (under 0.1 fF): %s. Give the transistors "
+            "their capacitances (CGSO/CGDO or TOX on the .model card) or the node a realistic "
+            "load, e.g. a modulator at level3 instead of level1; the built-in engine needs some "
+            "capacitance on a node that transistors switch." % ", ".join(tiny[:5]))
+
+
 def _uic_floor_op(sys: MNASystem, opts: NewtonOptions, pins) -> OpRecord:
     """The UIC starting state with a permanent 1e-12 S shunt on every node (see _tran_once)."""
     x0 = sys.block_initial_state()
@@ -578,9 +601,10 @@ def _tran_once(sys: MNASystem, opts: NewtonOptions, tstep, tstop, tstart,
                                       context="transient step t=%.6g s" % t)
             except ConvergenceError as exc:
                 raise ConvergenceError(
-                    "%s (step %d of %d, h=%.3g s, method=%s)"
+                    "%s (step %d of %d, h=%.3g s, method=%s)%s"
                     % (exc, k, M - 1, h,
-                       "BE" if rec.betas[k] == 0.0 else "TRAP"))
+                       "BE" if rec.betas[k] == 0.0 else "TRAP",
+                       _tiny_capacitance_hint(sys, x_prev, t, opts)))
             total_iters += it
             e = sys.eval(xn, t, need_jac=False, limiting=False, gmin=opts.gmin)
             q_n = e["q"].detach()

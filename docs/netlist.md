@@ -51,7 +51,7 @@ Passive devices:
 |---|---|---|---|
 | `wg` | 1, 1 | waveguide | `l=` length in metres, `alpha=` field transmission of the whole length (1 = lossless; see *Loss* below) |
 | `ps` | 1, 1 | phase shifter | `ps=` phase in radians (`0.5pi` is accepted) |
-| `mzi` | 2, 2 | a **coupler** of variable ratio (despite the name, a single coupler, not an interferometer): field through `cos θ`, cross `sin θ`, so power cross-coupling `κ² = sin²θ` — this is how to build a ring (see below). `l=` (default 0) only adds a common propagation phase and loss to both paths. | `theta=` coupling angle in rad, `l=`, `alpha=` |
+| `mzi` | 2, 2 | a **coupler** of variable ratio (despite the name, a single coupler, not an interferometer): field through `cos θ`, cross `i·sin θ` (the `i` is the usual quarter-wave phase of a coupler), so power cross-coupling `κ² = sin²θ` — this is how to build a ring (see below). `l=` (default 0) only adds a common propagation phase and loss to both paths. | `theta=` coupling angle in rad, `l=`, `alpha=` |
 | `pbum` | 2, 2 | programmable building-unit: the 2×2 Mach–Zehnder cell a photonic **mesh** is tiled from — coupler, a phase shift on each arm, coupler | `theta=` phase on the upper arm and `phi=` on the lower, in rad; `l=` arm length in m (**required**; 0 is allowed); `alpha=`; `cp_left=`, `cp_right=` coupler angles (default π/4, 50:50). With 50:50 couplers the split is set by `theta − phi`: 0 → all cross, π → all bar. |
 | `splitter1to1` … `splitter1to4` | 1, N | ideal N-way power splitter | — |
 | `wdm1to1`, `wdm1to2`, `wdm1to4` | 1, N | wavelength de-multiplexer (N = 1, 2 or 4; there is no `wdm1to3`): channel *k* of the `.freq` grid leaves by output port *k*. The grid must therefore have **exactly N points** — `wdm1to2` with a single `.freq` point is an error, and says so. | — |
@@ -65,6 +65,13 @@ are driven by a voltage:
 | `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
 | `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
 | `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W (required), `bw=` bandwidth in Hz, `idark=` dark current in A, `noise=`, `temp=`, `rload=`, `inoise=`, `coherent=1` — see *Photodetector bandwidth and noise* below |
+
+#### `mzm`: the drive
+
+The drive sets the phase difference between the arms, `Δφ = π·(V − vbias)/vpi`. At
+`V = vbias` all the light entering the first input (`a1` in `mzm0 a1 a2 b1 b2 ...`) leaves by the
+second output (`b2`); at `V = vbias + vpi`, by the first (`b1`); halfway between, it splits
+evenly.
 
 #### `mzm`: insertion loss and extinction ratio
 
@@ -139,8 +146,12 @@ which equivalent circuit SPIPE inserts:
 | `level3` | realistic depletion-mode RC: series access resistance, junction capacitance, pad capacitance | — |
 | `debug` | bare resistor | bare current source |
 
-You can add your own with `spipe.electronic_register('pd', 'level4', "<subckt text>")`;
-`examples/derived/n3_tia.py` does exactly that to swap in a real transimpedance amplifier.
+You can add your own with `spipe.electronic_register(kind, level, subckt_text)`, where `kind`
+is `'mod'` or `'pd'`. The text is a SPICE subcircuit named `<kind>_<level>`, whose first two ports
+are the device's electrical node and ground, e.g. `.subckt pd_level4 n ground ...`. A detector's
+subcircuit must contain the placeholder `Ipd <node+> <node->`, which SPIPE replaces with the
+simulated photocurrent. `examples/derived/n3_tia.py` does exactly this to swap in a real
+transimpedance amplifier. `spipe.electronic_reset()` removes what you registered.
 
 ### Photodetector bandwidth and noise
 
@@ -159,7 +170,7 @@ results do not depend on how finely `.tran` samples, once it resolves `bw`.
 | `noise=` | 1 | `0` keeps the bandwidth and drops the noise |
 | `temp=`, `rload=` | 300 K, 50 Ω | set the thermal-noise term `4kT/rload`. `rload=` is **only** a noise parameter: the load the detector actually drives is whatever the `.electronic` section connects to it. |
 | `inoise=` | — | input-referred noise density of the front end, A/√Hz; replaces the `temp=`/`rload=` term. Use it for a real amplifier. |
-| `r1=`, `r2=`, …, `wl=` | — | wavelength-dependent responsivity, a Taylor series about the wavelength `wl=` |
+| `r1=`, `r2=`, …, `wl=` | — | frequency-dependent responsivity: `R(ω) = r0 + r1·(ω − ω0) + r2·(ω − ω0)² + …` about the angular frequency `ω0 = 2πc/wl`. So `r1` is in A/W per rad/s, and a realistic value is tiny (around 1e-16). `wl=` is required with them, and a negative responsivity gives a warning. |
 
 Some limits to be aware of:
 - **The electronic side adds no noise.** Amplifier noise enters only through `inoise=`.
@@ -257,8 +268,8 @@ Device names are matched case-insensitively; parameter names follow SPICE (`W`, 
 .print tran v(vdrv) v(vo1)
 ```
 
-Every node named here comes back in the first dict `Circuit.simulate()` returns, keyed
-exactly as written (`probes_e['v(vo1)']`), one value per `.tran` sample. Without the line
+Every node named here comes back in the first dict `Circuit.simulate()` returns, keyed in
+lower case (`.print tran V(VO1)` gives `probes_e['v(vo1)']`), one value per `.tran` sample. Without the line
 that dict is empty.
 
 The probes are differentiable. On the built-in engine and Xyce their gradient is the total
@@ -280,7 +291,8 @@ Vdd vdd 0 3.0
 Vin g   0 PULSE(0 3 1n 0.2n 0.2n 10n 20n)
 MN1 vdrv g 0   0   nch W=8u  L=0.5u
 MP1 vdrv g vdd vdd pch W=16u L=0.5u
-Rload1 vo1 0 1k                          * a detector output needs a DC path to ground
+* a detector output needs a DC path to ground
+Rload1 vo1 0 1k
 Rload2 vo2 0 1k
 .sensparam MN1:W MN1:L
 .tran 0 4e-8 40

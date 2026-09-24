@@ -103,6 +103,31 @@ over the next samples, where the converged answer (`native_nsub = 64`) is 1.95, 
 photocurrent itself and the modulator drive are not affected. If you read a detector's
 *voltage*, fix `native_nsub` at 64 (the table above shows what that costs).
 
+## The `Circuit` call
+
+```python
+Circuit(path, spice_exe, power_node=None, spice_wrk_dir=None, keep_spice=True,
+        need_grads=False, use_adjoint=False)
+circuit.simulate(seed=None, x0=None, mode='quasistatic', differentiable=None)
+```
+
+| argument | meaning |
+|---|---|
+| `spice_exe` | `'native'`, `'xyce'`, `'hspice'`, or a path to either executable |
+| `power_node` | nodes of the electronic supply whose power to report |
+| `spice_wrk_dir` | where the generated deck and SPICE output go; by default a private temporary directory, removed afterwards |
+| `keep_spice` | keep SPICE's output files in that directory |
+| `use_adjoint` | Xyce's adjoint sensitivity instead of the direct method; SPIPE switches it off where Xyce's adjoint returns zeros |
+| `seed` | the random initial guess and the detector noise; the same seed gives the same result |
+| `x0` | an explicit initial guess for the drive, to pick a state of a circuit with several |
+| `mode` | `'quasistatic'` or `'envelope'` ([envelope.md](envelope.md)) |
+| `differentiable` | force the gradient path on (`True`) or off (`False`); by default it follows `.sensparam` |
+
+`simulate()` returns `probes_e, probes_p, photocurrent, drive, power`. `power` has the keys
+`'electronic'` (the `power_node` supplies), `'pd_equiv'` and `'mod_equiv'` (the detectors' and
+modulators' equivalent circuits) and `'photonic'` (the laser, when `.source` has a power budget).
+Each is `None` when it is not monitored.
+
 ## A trap worth knowing about Xyce
 
 Xyce's **transient adjoint** sensitivity silently returns **all zeros** for device

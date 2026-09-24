@@ -83,6 +83,14 @@ def init_coeff(pd_args: List[Dict], eval_omega) -> torch.Tensor:
         else:
             omega0 = 2 * torch.pi * FreeLightSpeed / pd_args[i]['wl']
             coeff[:, i] = taylor(collect_coeff(pd_args[i], 'r'), eval_omega, omega0)
+    if bool((coeff < 0).any()):
+        bad = sorted({int(j) + 1 for j in torch.nonzero(coeff < 0)[:, 1].tolist()})
+        warnings.warn(
+            f"photodetector(s) {bad}: the responsivity r0 + r1*(omega - omega0) + ... is negative "
+            f"at some simulated frequency (min {float(coeff.min()):.3g} A/W), which gives a "
+            f"negative photocurrent. r1, r2, ... are per (rad/s)^k of angular frequency, "
+            f"so they are tiny numbers (r1 ~ 1e-16 A/W per rad/s is already a steep slope).",
+            RuntimeWarning, stacklevel=3)
     return coeff
 
 
@@ -266,10 +274,9 @@ class PDArray(nn.Module):
         if time is None:
             if not self._no_time_warned:
                 warnings.warn(
-                    "A photo detector asked for coherent=1 but the transient time axis is not "
-                    "available to PDArray (Photonic builds it as PDArray(pd_args, omega) and "
-                    "calls it as pd_array(res)).  Falling back to the incoherent sum.  Pass the "
-                    "grid with PDArray.set_time(t), or give dt= on the pd line.")
+                    "A photodetector has coherent=1 but this run has no time axis, so the "
+                    "incoherent sum is used instead. Pass one: simulate(t, drive), or "
+                    "simulate(t) on a circuit with no modulator (or give dt= on the pd line).")
                 self._no_time_warned = True
             return incoherent
 
@@ -331,10 +338,9 @@ class PDArray(nn.Module):
             if time_axis is None:
                 if not self._no_time_warned:
                     warnings.warn(
-                        "A photo detector declared bw= but the transient time axis is not "
-                        "available to PDArray, so the bandwidth low-pass of the photocurrent is "
-                        "skipped (the noise bandwidth itself is still honoured).  Pass the grid "
-                        "with PDArray.set_time(t), or give dt= on the pd line.")
+                        "A photodetector has bw= but this run has no time axis, so its low-pass "
+                        "is skipped (its noise still uses bw). Pass one: simulate(t, drive), or "
+                        "simulate(t) on a circuit with no modulator (or give dt= on the pd line).")
                     self._no_time_warned = True
             else:
                 current = _lowpass(current, time_axis, self.bw)

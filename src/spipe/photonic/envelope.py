@@ -362,7 +362,7 @@ def _assemble(photonic, t_value: torch.Tensor, param_value: Optional[torch.Tenso
                                "a typo, or define the model by yourself.")
         class_ = _model_class(key, entry)
 
-        kwargs = {**attr, **photonic.mode_info, 'omega': omega, 'time': t_value}
+        kwargs = {**photonic.mode_info, **attr, 'omega': omega, 'time': t_value}
         if _entry_is_active(entry):
             kwargs['act'] = param_value[..., photonic.occur_order[ele]]
         instance = class_(**kwargs)

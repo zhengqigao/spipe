@@ -272,6 +272,12 @@ def _preprocess_mode(neff, ng=None, wl=1550e-9):
 
 
 def _preprocess_freq(start, stop, steps):
+    if float(steps) != int(float(steps)) or int(float(steps)) < 1:
+        raise ValueError(f".freq {start} {stop} {steps}: the point count must be a whole number "
+                         f"of at least 1.")
+    if float(start) <= 0 or float(stop) <= 0:
+        raise ValueError(f".freq {start} {stop} {steps}: frequencies must be positive, in Hz.")
+    steps = int(float(steps))
     if int(steps) == 1 and float(stop) != float(start):
         warnings.warn(f".freq {start} {stop} 1: with a single point only the start frequency "
                       f"({float(start):g} Hz) is used; the stop value is ignored.", stacklevel=3)
@@ -281,7 +287,8 @@ def _match(given_str, target_dict):
     # Case-insensitive, like SPICE: `MZM0` and `mzm0` are the same model. The electronic side
     # classifies photonic lines through this same function, so the two cannot disagree.
     given = str(given_str).lower()
-    for key, value in target_dict.items():
+    # longest prefix wins, as in the netlist parser, so a name can only ever mean one model
+    for key, value in sorted(target_dict.items(), key=lambda kv: -len(kv[0])):
         if given.startswith(key):
             return value
     return None
@@ -387,6 +394,69 @@ def _check_sources_connected(srce_node: Dict, node_has_ele: Dict) -> None:
             "exactly one device uses" + (f"; {where}." if where else " (there is no .source)."))
 
 
+#: directives the photonic section understands (``.probe`` is an alias of ``.prob``)
+_DIRECTIVES = {'.mode', '.freq', '.source', '.prob', '.probe', '.end'}
+
+
+def _logical_lines(content: List[str]) -> List[str]:
+    """The photonic section's lines as SPICE reads a deck: ``*`` starts a comment line, ``#``
+    and ``;`` start an inline comment, and a line starting with ``+`` continues the previous one.
+    (``*`` lines used to be read as a device called ``*``, and ``+`` lines were errors.)"""
+    lines: List[str] = []
+    for raw in content:
+        line = raw.split('#')[0].split(';')[0].strip()
+        if not line or line.startswith('*'):
+            continue
+        if line.startswith('+'):
+            if not lines:
+                raise RuntimeError(f"Photonic netlist: continuation line {raw.strip()!r} has no "
+                                   f"line to continue.")
+            lines[-1] = lines[-1] + ' ' + line[1:].strip()
+        else:
+            lines.append(line)
+    return lines
+
+
+def _check_ports(name: str, line: str, strings: List[str], ln: int, rn: int, an: int,
+                 kind: str = '') -> None:
+    """A device line has exactly its ports, then (for a driven device) one electrical node and
+    one load level. Anything else used to be dropped without a word: `l=10 um` became 10 metres
+    with `um` discarded, and an extra port vanished."""
+    optical = ln + rn
+    expected = optical + (an + 1 if an else 0)
+    if len(strings) == expected:
+        if an:
+            _check_level(name, 'pd' if kind == 'pd' else 'mod', strings[-1])
+        return
+    if an and len(strings) == optical + an:
+        return      # no load level: fine for Photonic alone; a Circuit asks for one
+    if an:
+        shape = (f"{optical} optical node(s), then {an} electrical node(s) and (for a Circuit) "
+                 f"a load level such as level1")
+    else:
+        shape = f"{optical} optical port(s) ({ln} in, {rn} out)"
+    extra = strings[expected:]
+    raise ValueError(
+        f"{name}: expected {shape}, then key=value parameters, but the line has "
+        f"{len(strings)} bare token(s): {' '.join(strings)}."
+        + (f" {' '.join(extra)!r} is not a port or a parameter -- a value with a space before "
+           f"its unit ('l=10 um')? Write it without the space ('l=10um')." if extra else
+           f" Missing: {expected - len(strings)}.")
+        + f"\n  line: {line}")
+
+
+def _check_level(name: str, kind: str, level: str) -> None:
+    """The electrical load level must exist; it used to be checked only inside a Circuit."""
+    from spipe.electronic.electronic import ModModel, PdModel
+    registry = PdModel if kind == 'pd' else ModModel
+    known = sorted(set(registry.model) | set(registry.user_model))
+    if level not in known:
+        raise ValueError(
+            f"{name}: unknown {'detector' if kind == 'pd' else 'modulator'} load level "
+            f"{level!r}; available: {', '.join(known)} (register more with "
+            f"spipe.electronic_register('{kind}', '<name>', subckt_text)).")
+
+
 def _check_device_keys(name: str, class_, kv: Dict) -> None:
     """Refuse an unknown device parameter when the netlist is read, not at the first simulate()."""
     import difflib
@@ -424,7 +494,12 @@ def _check_pd_args(name: str, kv: Dict) -> None:
                            f"{', '.join(k + '=' for k in _PD_KEYS)}.")
     if 'r0' not in kv:
         raise ValueError(f"photodetector {name}: give its responsivity r0= in A/W "
-                         f"(r1=, r2=, ... with wl= add a wavelength dependence).")
+                         f"(r1=, r2=, ... with wl= add a frequency dependence).")
+    higher = sorted(k for k in kv if re.fullmatch(r'r[1-9]\d*', k))
+    if higher and 'wl' not in kv:
+        raise ValueError(f"photodetector {name}: {', '.join(k + '=' for k in higher)} "
+                         f"{'is' if len(higher) == 1 else 'are'} a Taylor series about the "
+                         f"angular frequency 2*pi*c/wl, so it needs wl= (it used to be ignored).")
     rules = {'r0': (lambda v: v >= 0, 'must be >= 0 (A/W)'),
              'bw': (lambda v: v >= 0, 'must be > 0 in Hz (leave it out for an ideal detector)'),
              'idark': (lambda v: v >= 0, 'must be >= 0 (A)'),
@@ -525,9 +600,7 @@ class Photonic(object):
 
         cnt = 0
         model_table = _model_info()
-        for line in self.p_content:
-            line = line.split('#')[0].strip()
-            if not line: continue
+        for line in _logical_lines(self.p_content):
 
             initial, strings, kv_pair = extract(line, convert_numeric=True)
 
@@ -537,12 +610,14 @@ class Photonic(object):
                 initial = initial.lower()
 
             matched = False
-            for k, v in model_table.items():
-                if initial.startswith(k):
+            # longest prefix first, and only one: a name must not instantiate two models
+            for k, v in sorted(model_table.items(), key=lambda kv: -len(kv[0])):
+                if is_device and initial.startswith(k):
                     matched = True
                     ln, rn = v['num_port']
                     an = v['active_port']
                     _check_device_keys(initial, _model_class(k, v), kv_pair)
+                    _check_ports(initial, line, strings, ln, rn, an if _entry_is_active(v) else 0)
 
                     # active iff the model declares an electrical drive port -- see
                     # _entry_is_active(); the old test was initial.startswith('mod')
@@ -563,6 +638,15 @@ class Photonic(object):
                         self.circuit_element[initial] = {'ln': strings[:ln],
                                                          'rn': strings[ln:ln + rn],
                                                          **kv_pair}
+                    break
+
+            if not is_device and initial.lower() not in _DIRECTIVES:
+                import difflib
+                close = difflib.get_close_matches(initial.lower(), sorted(_DIRECTIVES), n=1)
+                raise ValueError(f"Unknown photonic directive {initial!r}"
+                                 + (f" (did you mean {close[0]!r}?)" if close else "")
+                                 + f"; the photonic section knows {', '.join(sorted(_DIRECTIVES))}."
+                                 + f"\n  line: {line}")
 
             if initial.lower() == '.mode':
                 self.mode_info['neff'], self.mode_info['ng'], self.mode_info['wl'] = _preprocess_mode(*strings,
@@ -594,8 +678,15 @@ class Photonic(object):
                         warnings.warn(f"Node {node} has been assigned source twice.")
                 self.laser_info['power'] = kv_pair.get('power', None)
                 self.laser_info['eff'] = kv_pair.get('eff', None)
+                if (self.laser_info['power'] is None) != (self.laser_info['eff'] is None):
+                    raise ValueError(f"'{line}': the power budget needs both power= and eff= "
+                                     f"(one without the other used to be ignored).")
+                if self.laser_info['eff'] is not None and not 0 < float(self.laser_info['eff']) <= 1:
+                    raise ValueError(f"'{line}': eff= is the laser's wall-plug efficiency, "
+                                     f"between 0 and 1; got {self.laser_info['eff']}.")
 
             if initial.lower().startswith('pd'):
+                _check_ports(initial, line, strings, 1, 0, 1, kind='pd')
                 _check_pd_args(initial, kv_pair)
                 self.dout_node.append(strings[0])
                 self.pd_args.append(kv_pair)
@@ -621,6 +712,9 @@ class Photonic(object):
                 cnt += 1
 
         # final preprocessing
+        if self.omega is None:
+            raise ValueError("The photonic netlist has no .freq line: give the optical frequencies "
+                             "to solve at, e.g. '.freq 193.1e12 193.1e12 1' for one carrier.")
         for k, v in self.srce_node.items():
             self.srce_node[k] = torch.ones(self.omega.size(), dtype=config['complex_dtype'],
                                            device=config['device']) * v
@@ -888,6 +982,8 @@ class Photonic(object):
                     "require grad), and its other parameters are not trainable."
                     if active else "not a passive device of this netlist."))
         ele = matches[0]
+        # parameter names are case-insensitive, like device names
+        name = str(name).lower()
         key = (ele, name)
         if key in self._trainable:
             return self._trainable[key]
@@ -919,6 +1015,12 @@ class Photonic(object):
         # Without it the noise generator simply continues, and every call draws fresh noise.
         if seed is not None:
             self.pd_array.reseed(seed)
+        # NumPy arrays and lists are accepted as they are everywhere else in scientific Python
+        if t_value is not None and not torch.is_tensor(t_value):
+            t_value = torch.as_tensor(t_value, dtype=config['real_dtype'], device=config['device'])
+        if param_value is not None and not torch.is_tensor(param_value):
+            param_value = torch.as_tensor(param_value, dtype=config['real_dtype'],
+                                          device=config['device'])
         # t_value: (time_pin)
         # param_value: (time_pin, dim_pin)
         #
@@ -939,14 +1041,17 @@ class Photonic(object):
         passive_time = None
         if len(self.mod_element.keys()) == 0:
             if param_value is not None and param_value.numel():
-                warnings.warn("param_value is ignored: the netlist has no modulator to drive.")
+                warnings.warn("The drive is ignored: the netlist has no modulator to drive.")
             if t_value is not None:
                 if t_value.ndim != 1:
                     raise RuntimeError(f"t_value must be a 1D tensor, but got shape {t_value.shape}")
                 passive_time = t_value
             t_value, param_value = None, None
         if (param_value is None) and len(self.mod_element.keys()):
-            raise RuntimeError(f"param_value is not provided but Modulators are defined in the netlist")
+            raise RuntimeError(
+                f"No drive given, but the netlist has {len(self.mod_element)} modulator(s) "
+                f"({', '.join(self.occur_order)}): call simulate(t, drive) with drive of shape "
+                f"(len(t), {len(self.mod_element)}), one column per modulator in that order.")
 
         if (t_value is None) != (param_value is None):
             raise RuntimeError("Both t_value and param_value must be None or provided at the same time.")
@@ -1200,11 +1305,11 @@ class Simulate(torch.autograd.Function):
                         # active devices are the ones that read a drive column; they are all
                         # in `mod_element`, hence sorted after every passive element, so
                         # `ctx.mod_line` is the first row the adjoint has to account for
-                        ele_instance = class_(**{**attr, **mode_info, 'omega': omega, 'time': t_value,
+                        ele_instance = class_(**{**mode_info, **attr, 'omega': omega, 'time': t_value,
                                                  'act': param_value[..., occur_order[ele]]})
                         if not hasattr(ctx, 'mod_line'): ctx.mod_line = line_counter
                     else:
-                        ele_instance = class_(**{**attr, **mode_info, 'omega': omega, 'time': t_value})
+                        ele_instance = class_(**{**mode_info, **attr, 'omega': omega, 'time': t_value})
 
                     inward_ln, inward_rn = inward_node[ele]['ln'], inward_node[ele]['rn']
                     outward_ln, outward_rn = outward_node[ele]['ln'], outward_node[ele]['rn']
@@ -1416,7 +1521,7 @@ class Simulate(torch.autograd.Function):
                     # diagonal is ever formed -- the old code allocated a
                     # (time, time, len(omega), 2 * num_node, 2 * num_node) work array to hold it
                     # (SPEC-P2.1).
-                    jac_diag = _modulator_jacobian(class_, {**attr, **ctx.mode_info, 'omega': omega},
+                    jac_diag = _modulator_jacobian(class_, {**ctx.mode_info, **attr, 'omega': omega},
                                                    t_value, param_value[..., ctx.occur_order[ele]],
                                                    num_freq, num_constraint)
 
@@ -1443,7 +1548,7 @@ class Simulate(torch.autograd.Function):
                 # with respect to those (handing it our tensor would be cut off by the wrap)
                 attr = {k: (v.detach() if torch.is_tensor(v) else v)
                         for k, v in ctx.circuit_element[ele].items()}
-                instance = class_(**{**attr, **ctx.mode_info, 'omega': omega, 'time': t_value})
+                instance = class_(**{**ctx.mode_info, **attr, 'omega': omega, 'time': t_value})
                 leaves = {name: instance.params[name] for _, name in keys}
                 S = instance.transfer(None)
                 if S.ndim == 3:

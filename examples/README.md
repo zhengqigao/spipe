@@ -42,7 +42,7 @@ HSPICE V-2023.12-SP2, `spipe.config` defaults unless the example says otherwise.
 | `oeo_optical_delay.py` | refuses; 15.68 ns of optical delay against a 25 ps time step, `max_group_delay / dt = 627` |
 | `derived/n1_dac.py` | swing **3.272953 V** (sky130 3.274181), LSB **25.7713 mV** (25.7810), 1% settling **2.728 ns** (2.730), monotonic (sky130 is not), INL/DNL 0.381 / 0.748 LSB (sky130 2.517 / 2.517) |
 | `derived/n1_dac.py --native` | the same 128-code transfer solved by `spipe.electronic.native`: **max &#124;native - HSPICE&#124; = 17 uV = 0.0007 LSB** |
-| `derived/n2_mzm_driver.py` | the eye grows from about 0 to about 350 uA as W goes 4 -> 64 um; d(eye)/dW at W = 16 um is **8.78 uA/um on HSPICE, 8.38 on Xyce, 8.20 on the built-in engine** (see below) |
+| `derived/n2_mzm_driver.py` | the eye grows from about 0 to about 350 uA as W goes 4 -> 64 um; d(eye)/dW around W = 16 um, a central difference over 8 -> 32 um, is **8.78 uA/um on HSPICE, 8.38 on Xyce, 8.20 on the built-in engine** (see below) |
 | `derived/n3_tia.py` | real TIA 8.00 kOhm and 480 ps against the ideal block's 9.99 kOhm and 60 ps (re-measured after the `mzm` passivity fix, which moves the TIA's operating point slightly) |
 | `derived/n4_ptc_dotproduct.py` | photonic section byte-identical to `paper/ptc_hspice/test12.sp`; 2 fixed-point iterations; DAC error 1.44 LSB worst case; dot products within 0.25-0.89 V of closed form on a +-20 V scale |
 

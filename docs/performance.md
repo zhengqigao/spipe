@@ -82,3 +82,17 @@ SPIPE warns when a float32 run has phases that large.
 | `'fd_step'` | 1e-3 | relative step of the HSPICE back end's finite-difference gradient |
 | `'envelope_*'` | — | see [envelope.md](envelope.md) |
 | `'max_iter'`, `'atol'`, `'rtol'`, `'seed'` | 100, 1e-3, 1e-3, 0 | the electronic–photonic fixed point, and its random start |
+
+The fixed-point iteration and the coupled gradient have finer controls, with defaults that
+rarely need changing:
+- iteration: `damping`, `min_damping`, `backoff_factor`, `divergence_factor`, `anderson_depth`,
+  `anderson_reg`, `fixed_point_stability_check`;
+- coupled gradient: `coupling_tol`, `coupling_max_iter`, `coupling_dense_limit`,
+  `coupling_cond_limit`, `coupling_zero_rtol`, `coupling_probe_rtol`,
+  `coupling_probe_linearity`, `coupling_amplification_warn`;
+- built-in engine and the HSPICE and Xyce back ends: `native_adaptive`, `native_uic`,
+  `native_lte_reltol`, `xyce_sens_photocurrent`;
+- `photonic_jac_bytes`.
+
+They are described where they are used in the source. Setting a key SPIPE does not read gives
+a warning, so a misspelt setting cannot silently do nothing.

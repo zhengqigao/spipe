@@ -17,7 +17,37 @@ import scipy.interpolate  # noqa: F401  (import-order guard, see above)
 
 import torch
 
-config = {'device': torch.device("cpu"), #torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
+__version__ = "2.0.0"
+
+#: Every setting SPIPE reads (docs/performance.md lists what they do). ``spipe.config`` is a
+#: plain dict that warns when a key outside this set is written, so a typo such as
+#: ``config['native_nsubb'] = 4`` does not pass silently as "no effect".
+_KNOWN_CONFIG_KEYS = frozenset({
+    'device', 'real_dtype', 'complex_dtype', 'lr', 'max_iter', 'atol', 'rtol', 'seed',
+    'quasistatic_check', 'damping', 'min_damping', 'backoff_factor', 'divergence_factor',
+    'anderson_depth', 'anderson_reg', 'fixed_point_stability_check',
+    'coupling_tol', 'coupling_max_iter', 'coupling_dense_limit', 'coupling_cond_limit',
+    'coupling_zero_rtol', 'coupling_probe_rtol', 'coupling_probe_linearity',
+    'coupling_amplification_warn', 'photonic_solver', 'photonic_dense_budget',
+    'photonic_jac_chunk', 'photonic_jac_bytes', 'native_nsub', 'native_adaptive',
+    'native_uic', 'native_lte_reltol', 'fd_step', 'xyce_sens_photocurrent',
+    'envelope_edge', 'envelope_adiabatic_ratio', 'envelope_tap_tol', 'envelope_max_bytes',
+    'envelope_grad_max_bytes'})
+
+
+class _Config(dict):
+    def __setitem__(self, key, value):
+        if key not in _KNOWN_CONFIG_KEYS:
+            import difflib
+            import warnings
+            close = difflib.get_close_matches(str(key), sorted(_KNOWN_CONFIG_KEYS), n=1)
+            warnings.warn(f"spipe.config[{key!r}] is not a setting SPIPE reads, so it has no "
+                          f"effect" + (f" (did you mean {close[0]!r}?)" if close else "")
+                          + ". The settings are listed in docs/performance.md.", stacklevel=2)
+        super().__setitem__(key, value)
+
+
+config = _Config({'device': torch.device("cpu"), #torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
           'real_dtype': torch.float64,
           'complex_dtype': torch.complex128,
           'lr': 1e-2,
@@ -31,7 +61,7 @@ config = {'device': torch.device("cpu"), #torch.device("cuda") if torch.cuda.is_
           # Emit a warning when the estimated optical group delay of the photonic network is no
           # longer negligible compared with the transient time step (the quasi-static assumption
           # the steady-state photonic solve relies on).  Set to False to disable the check.
-          'quasistatic_check': True}
+          'quasistatic_check': True})
 
 from .core import Circuit
 

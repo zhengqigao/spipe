@@ -64,13 +64,21 @@ def convert(value_str: str) -> float:
     # class allowed '-' but not '+', so a number with an explicit positive exponent
     # ('1.93e+14') parsed as '1.93e' and raised. Python's default float formatting
     # emits exactly that form, so any programmatically generated netlist hit it.
-    match = re.match(r"([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Z]*)", value_str)
+    # The whole value must match -- a prefix match used to read '0.5pi/2' as 0.5 pi and drop the
+    # '/2' -- and a bare 'pi' (or '-pi', 'pi/2') is an angle like '0.25pi' is.
+    number = r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
+    match = re.fullmatch(rf"([+-]?)({number})?([a-zA-Z]*)(?:/({number}))?", value_str)
+    if not match or (match.group(2) is None and match.group(3) != 'pi'):
+        raise ValueError(
+            f"Cannot read the value {value_str!r}: write a number with an optional unit, e.g. "
+            f"1.5, 10um, 193.1thz, 0.25pi, pi, pi/2.")
 
-    if not match:
-        raise ValueError(f"Invalid format: {value_str}")
-
-    numeric_value = float(match.group(1))
-    unit_part = match.group(2).strip()
+    numeric_value = float(match.group(2)) if match.group(2) is not None else 1.0
+    if match.group(1) == '-':
+        numeric_value = -numeric_value
+    if match.group(4) is not None:
+        numeric_value = numeric_value / float(match.group(4))
+    unit_part = match.group(3).strip()
 
     if unit_part in unit_multipliers:
         return numeric_value * unit_multipliers[unit_part]

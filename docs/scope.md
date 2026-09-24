@@ -100,10 +100,11 @@ where the cross terms *are* the signal.
 field and low-passes at the detector bandwidth `bw`, so the two regimes are one formula.
 The default preserves the incoherent behaviour.
 
-`coherent=1` needs `bw=` (there is nothing to reject without a pole) and a transient time
-axis, which means a netlist with at least one modulator — a purely passive circuit is a
-single sample and carries no time. Two properties are worth knowing before you read the
-output:
+`coherent=1` needs a transient time axis: the drive's, or on a circuit with no modulator, the
+`t` you pass to `Photonic(...).simulate(t)`. Without `bw=` there is no low-pass, and the
+detector returns the raw beat, sampled at your time step. It is aliased if the step is coarser
+than `1/(2·Δf)` for the carriers' spacing `Δf`. Give `bw=` for a real detector. Two properties
+are worth knowing before you read the output:
 
 - The reduction to the incoherent sum is **asymptotic, not exact**. A single-pole filter
   rejects a beat note at `Δf` by roughly `bw / Δf`, so carriers 500× above the bandwidth

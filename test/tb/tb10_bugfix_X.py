@@ -737,6 +737,65 @@ def build():
     finally:
         sp.config['real_dtype'] = _rd; sp.config['complex_dtype'] = _cd
 
+    # ---------------- X23 : what the documentation audit found -----------------------------
+    _m23 = [".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 193.1e12 193.1e12 1", ".source 1.0@a1"]
+
+    def _p23(lines, head=_m23):
+        return sp.Photonic([x + "\n" for x in head + lines])
+
+    def _phase23(extra, head=_m23):
+        f = _p23([f"wg0 a1 b1 l=10e-6 {extra}", "pd1 b1 v1 level1 r0=1", ".prob b1"], head).simulate()[1]
+        return float(torch.angle(f['b1'][0, 0, 1]))
+    try:
+        # a device's own neff= used to be overwritten by .mode, while its gradient was not
+        _ph3 = _phase23('neff=3.0')
+        tb.close('X23.device_neff_override', _ph3,
+                 _phase23('', [".mode neff=3.0 ng=4.0 wl=1550e-9"] + _m23[1:]), 1e-12,
+                 detail='wg0 ... neff=3.0 equals .mode neff=3.0 (it used to be ignored)')
+        _pp = _p23(["wg0 a1 b1 l=10e-6 neff=3.0", "pd1 b1 v1 level1 r0=1", ".prob b1"])
+        _n = _pp.param('wg0', 'NEFF')                      # parameter names case-insensitive
+        torch.angle(_pp.simulate()[1]['b1'][0, 0, 1]).backward()
+        _fd = (_phase23('neff=3.000001') - _phase23('neff=2.999999')) / 2e-6
+        tb.close('X23.device_neff_gradient', float(_n.grad), _fd, 1e-5,
+                 detail='d phase / d neff agrees with the forward result it now affects')
+    except Exception as _e:
+        tb.ok('X23.device_neff_override', False, repr(_e))
+
+    _tail = ["pd1 b1 v1 level1 r0=1"]
+    tb.raises('X23.stray_token_refused', lambda: _p23(["wg0 a1 b1 l=10 um"] + _tail), ValueError,
+              "'l=10 um' used to be 10 metres with 'um' dropped")
+    tb.raises('X23.extra_port_refused', lambda: _p23(["wg0 a1 b1 c1 l=1e-6"] + _tail), ValueError)
+    tb.no_raise('X23.spice_comment_and_continuation',
+                lambda: _p23(["* a comment line", "wg0 a1 b1", "+ l=1e-6 ; inline"] + _tail).simulate())
+    tb.raises('X23.unknown_directive_refused', lambda: _p23([".frq 1 2 3", "wg0 a1 b1 l=1e-6"] + _tail),
+              ValueError)
+    tb.raises('X23.missing_freq_named', lambda: sp.Photonic([x + "\n" for x in
+              [".mode neff=2.35 ng=4.0 wl=1550e-9", ".source 1.0@a1", "wg0 a1 b1 l=1e-6"] + _tail]),
+              ValueError)
+    tb.raises('X23.eff_out_of_range', lambda: sp.Photonic([x + "\n" for x in _m23[:2] +
+              [".source 1.0@a1 power=1 eff=2", "wg0 a1 b1 l=1e-6"] + _tail]), ValueError)
+    tb.raises('X23.r1_without_wl', lambda: _p23(["wg0 a1 b1 l=1e-6", "pd1 b1 v1 level1 r0=1 r1=1e-3"]),
+              ValueError)
+    tb.raises('X23.unknown_load_level', lambda: _p23(["wg0 a1 b1 l=1e-6", "pd1 b1 v1 level9 r0=1"]),
+              ValueError)
+    try:
+        from spipe.utils import convert as _cv
+        tb.ok('X23.bare_pi_and_fraction', abs(_cv('pi') - math.pi) < 1e-15
+              and abs(_cv('0.5pi/2') - math.pi / 4) < 1e-15,
+              "'pi' was an error and '0.5pi/2' was read as 0.5 pi")
+    except Exception as _e:
+        tb.ok('X23.bare_pi_and_fraction', False, repr(_e))
+    with warnings.catch_warnings(record=True) as _w23:
+        warnings.simplefilter("always")
+        sp.config['native_nsubb'] = 4
+    sp.config.pop('native_nsubb', None)
+    tb.ok('X23.config_typo_warns', any('native_nsub' in str(x.message) for x in _w23),
+          "a misspelt setting used to be accepted silently")
+    tb.raises('X23.register_checks_subckt', lambda: sp.electronic_register('pd', 'levelx', ".subckt foo n g\n.ends"),
+              ValueError)
+    tb.raises('X23.register_checks_kind', lambda: sp.electronic_register('modulator', 'levelx', ".subckt x"),
+              ValueError)
+
     return tb
 
 

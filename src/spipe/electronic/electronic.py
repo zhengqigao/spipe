@@ -36,8 +36,10 @@ class BaseModel(object):
         elif level in cls.user_model.keys():
             return cls.user_model[level]
         else:
-            raise RuntimeError(f"The model'{level}' is not supported for {cls.name}."
-                               f" Please define it via the register() function.")
+            known = sorted(set(cls.model) | set(cls.user_model))
+            raise RuntimeError(f"The load level {level!r} is not defined for a {cls.name.lower()} "
+                               f"(available: {', '.join(known)}). Add one with "
+                               f"spipe.electronic_register(...).")
 
     @classmethod
     def register(cls, level: str, model_str: str) -> None:
@@ -334,7 +336,9 @@ def _run_spice(command: List[str], outputs: List[str]) -> None:
         tail = '\n'.join(text.strip().splitlines()[-15:])
         # HSPICE writes the reason to its listing, not to the terminal ("job aborted" is all
         # the terminal says), and the listing goes when the scratch directory does. Quote it.
-        errors = []
+        errors = ['    ' + l.strip() for l in text.splitlines()
+                  if re.search(r'\berror\b', l, re.IGNORECASE)
+                  and not re.search(r'\b0 errors?\b', l, re.IGNORECASE)]
         for path in outputs:
             if path.endswith('.lis') and os.path.exists(path):
                 with open(path, errors='replace') as listing:
@@ -342,7 +346,7 @@ def _run_spice(command: List[str], outputs: List[str]) -> None:
                 for i, line in enumerate(lines):
                     if '**error**' in line.lower():
                         errors.append('    ' + ' '.join(x.strip() for x in lines[i:i + 3]))
-        found = ("\n  errors in the listing:\n" + '\n'.join(errors[:10])) if errors else ''
+        found = ("\n  errors reported:\n" + '\n'.join(errors[:10])) if errors else ''
         raise RuntimeError(
             f"{os.path.basename(command[0])} exited with status {proc.returncode}.\n"
             f"  command: {' '.join(shlex.quote(c) for c in command)}{found}\n"
@@ -518,12 +522,31 @@ def _resample(values: torch.Tensor, weights) -> torch.Tensor:
 # '5 7 3 level1' given 'modp1 5 7 3 level1 c=10'
 
 def register(device: str, model_name: str, model_content: str) -> None:
-    if device.lower() == 'mod':
-        _model_dict['mod'][0].register(model_name, model_content)
-    elif device.lower() == 'pd':
-        _model_dict['pd'][0].register(model_name, model_content)
-    else:
-        raise NotImplementedError(f"register() function receives an unrecognized device: {device}")
+    """Add an electrical load level: the equivalent circuit a modulator (``'mod'``) or a
+    photodetector (``'pd'``) presents to the electronics.
+
+    ``model_content`` is a SPICE subcircuit named ``<device>_<model_name>`` whose first two
+    ports are the device's electrical node and ground, e.g. ``.subckt pd_level4 n ground``. A
+    detector's subcircuit must contain the photocurrent placeholder ``Ipd <node+> <node->``,
+    which SPIPE replaces with the simulated photocurrent.
+    """
+    kind = device.lower()
+    if kind not in ('mod', 'pd'):
+        raise ValueError(f"electronic_register: device must be 'mod' (a modulator's load) or "
+                         f"'pd' (a detector's), got {device!r}.")
+    header = model_content.strip().splitlines()[0].split() if model_content.strip() else []
+    expected = f"{kind}_{model_name}"
+    if len(header) < 4 or header[0].lower() != '.subckt' or header[1] != expected:
+        raise ValueError(
+            f"electronic_register('{kind}', '{model_name}', ...): the text must start with "
+            f"'.subckt {expected} n ground ...' (the name {expected!r}, then the electrical node "
+            f"and ground); it starts with {' '.join(header[:4])!r}.")
+    if kind == 'pd' and not re.search(r'(?im)^\s*ipd\s+\S+\s+\S+', model_content):
+        raise ValueError(
+            f"electronic_register('pd', '{model_name}', ...): a detector subcircuit needs the "
+            f"photocurrent placeholder 'Ipd <node+> <node->', which SPIPE replaces with the "
+            f"simulated photocurrent.")
+    _model_dict[kind][0].register(model_name, model_content)
 
 
 def reset() -> None:
@@ -634,6 +657,13 @@ class Electronic(object):
         if key in self.sens_values:
             return self.sens_values[key]
         listed = ', '.join(format_key(d, p) for d, p in self.sens_declared) or '(none)'
+        photonic_names = {line.split()[0].lower() for line in self.p_content if line.split()}
+        if str(device).lower() in photonic_names:
+            raise RuntimeError(
+                f"{device!r} is a photonic device. Circuit.param() and .sensparam cover electronic "
+                f"device parameters only; photonic parameters are trainable with "
+                f"Photonic(...).param() on a photonic circuit of its own, not yet inside a "
+                f"Circuit (see docs/differentiability.md).")
         raise RuntimeError(
             f"{format_key(device, name)} is not a differentiable electronic parameter of "
             f"this circuit. Declare it in the .electronic section with "
@@ -1713,6 +1743,19 @@ class SimulateHspice(torch.autograd.Function):
                 if h == step:
                     guard_all_zero(block, [name], ctx.objective, 'finite-difference', 'hspice',
                                    objective_name='the modulator drive voltage')
+                    moved = float((samples[0] - samples[1]).abs().max())
+                    scale = float(torch.stack(samples).abs().max())
+                    if scale > 0 and moved < 1e-3 * scale:
+                        # HSPICE's default accuracy is ~1e-3 of the signal (reltol); a change
+                        # smaller than that is not resolved, and two step sizes can agree on it
+                        # (the README example: -8e-4 on HSPICE where the gradient is ~26).
+                        warnings.warn(
+                            f"The HSPICE finite-difference gradient with respect to {name} is "
+                            f"not resolved: changing {parameter} by {relative:g} of its value "
+                            f"moves the output by at most {moved:.3g} V, below HSPICE's default "
+                            f"accuracy (~1e-3 of the {scale:.3g} V signal). Use "
+                            f"spice_exe='native' for this gradient, or tighten HSPICE "
+                            f"(.option delmax=... reltol=...).", RuntimeWarning, stacklevel=2)
                 estimates.append((cotangent * block).sum())
             with torch.no_grad():
                 tensor.fill_(nominal)
