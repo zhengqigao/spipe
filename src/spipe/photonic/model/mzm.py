@@ -278,7 +278,14 @@ class MZM(Device):
         drive = act - self.params['vbias']
 
         tau = self.params['tau']
-        order = int(self.params['order'])
+        order_value = float(self.params['order'])
+        if not float(tau) >= 0.0:
+            raise ValueError(f"mzm: tau={float(tau):g}, but the response time must be >= 0 "
+                             f"(tau=0 is an instantaneous modulator).")
+        if order_value != int(order_value) or order_value < 1:
+            raise ValueError(f"mzm: order={order_value:g}, but the filter order must be a whole "
+                             f"number >= 1 (tau=0 turns the filter off).")
+        order = int(order_value)
         if float(tau) > 0.0 and order > 0:
             for _ in range(order):
                 drive = _one_pole(drive, self.params['time'], tau)

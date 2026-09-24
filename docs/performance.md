@@ -81,7 +81,7 @@ SPIPE warns when a float32 run has phases that large.
 | `'native_nsub'` | adaptive, at most 8 | internal steps per sample on the built-in engine: accuracy against time ([backends.md](backends.md)) |
 | `'fd_step'` | 1e-3 | relative step of the HSPICE back end's finite-difference gradient |
 | `'envelope_*'` | — | see [envelope.md](envelope.md) |
-| `'max_iter'`, `'atol'`, `'rtol'`, `'seed'` | 100, 1e-3, 1e-3, 0 | the electronic–photonic fixed point, and its random start |
+| `'max_iter'`, `'atol'`, `'rtol'`, `'seed'` | 100, 1e-3, 1e-3, 0 | the electronic–photonic fixed point, and its random start. `atol` is in volts of drive: fine for a volt-scale drive, too coarse for a loop whose feedback is only millivolts (there, the returned drive can differ from the true fixed point by a large fraction of the feedback). Lower it for such circuits. |
 
 The fixed-point iteration and the coupled gradient have finer controls, with defaults that
 rarely need changing:

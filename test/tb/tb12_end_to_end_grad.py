@@ -451,6 +451,57 @@ def build():
         tb.ok('E4.circuit_envelope_grad_vs_fd', False, f"{e!r}")
 
     # ------------------------------------------------------------------
+    # Coarse sampling and multistable loops on the built-in engine.
+    # (a) The step-size error estimate found no stencil on an 11-sample run and reported a
+    #     perfect score, so it stopped at 1 step per sample: an inverter on a 0-3 V supply
+    #     "swung" from -0.73 V to 3.44 V. (b) The random initial guess was drawn per sample, so a
+    #     DC loop with several stable states jumped between them from sample to sample.
+    # ------------------------------------------------------------------
+    try:
+        import tempfile
+        from spipe.core.core import Circuit
+        import spipe as _sp5
+        src = open(os.path.join(REPO, 'examples', 'link_driver_mzm.sp')).read()
+        d11 = os.path.join(tempfile.mkdtemp(prefix='spipe_tb12_'), 'link11.sp')
+        open(d11, 'w').write(src.replace('.tran 0 4e-8 40', '.tran 0 4e-8 11'))
+        with torch.no_grad(), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            adaptive = Circuit(d11, 'native').simulate()[3][:, 0]
+            _sp5.config['native_nsub'] = 8
+            try:
+                fixed8 = Circuit(d11, 'native').simulate()[3][:, 0]
+            finally:
+                _sp5.config['native_nsub'] = None
+        tb.ok('E5.coarse_samples_within_rails',
+              float(adaptive.min()) > -0.05 and float(adaptive.max()) < 3.05,
+              f'drive {float(adaptive.min()):.3f} .. {float(adaptive.max()):.3f} V on a 0-3 V supply')
+        tb.lt('E5.coarse_samples_match_fixed_steps', float((adaptive - fixed8).abs().max()), 1e-6,
+              'the adaptive choice agrees with a fixed 8 steps per sample')
+
+        loop = (".electronic\nRload npd 0 1000\nVofs nofs 0 0.1\nEamp nrf nofs npd 0 2.2\n"
+                ".tran 0 48n 13\n.photonic\n.mode neff=2.35 ng=4.0 wl=1550e-9\n"
+                ".freq 193.5e12 193.5e12 1\n.source 0.0316227766@nin\n"
+                "mzm0 nin nin_unused nbar ncross nrf level1 vpi=2 vbias=0 il=0 act_l=1e-5\n"
+                "pd1 nbar npd level1 r0=1\n")
+        dl = os.path.join(os.path.dirname(d11), 'loop.sp')
+        open(dl, 'w').write(loop)
+        spreads = []
+        with torch.no_grad(), warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            _sp5.config['native_uic'] = False
+            try:
+                for seed in (0, 1, 2):
+                    drv = Circuit(dl, 'native').simulate(seed=seed)[3][:, 0]
+                    spreads.append(float(drv.max() - drv.min()))
+            finally:
+                _sp5.config['native_uic'] = True
+        tb.lt('E5.multistable_loop_one_state', max(spreads), 1e-3,
+              f'a DC loop with three states: spread over the record per seed {spreads} V '
+              f'(it used to jump 0.12 / 0.70 / 2.23 V between samples)')
+    except Exception as e:
+        tb.ok('E5.coarse_samples_within_rails', False, f"{e!r}")
+
+    # ------------------------------------------------------------------
     # Like for like: the unified call must BE the composition. Same netlist, same
     # grid, same loss, once through Circuit.simulate() and once by driving the
     # native engine on the deck Circuit generated, then Photonic on its drive.

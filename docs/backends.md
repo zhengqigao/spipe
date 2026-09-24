@@ -99,9 +99,19 @@ of picoseconds (2 fF behind 1 kΩ plus the load), far below the spacing of the o
 samples. There the trapezoidal rule does not settle: each change of photocurrent leaves a tail of
 roughly `R · τ · ΔI / Δt` that only shrinks to about a third of itself per sample, where it should vanish at once. In the example above,
 with `.print tran v(vo1)` added, the "0" level after a 500 V pulse reads 1.98, 0.73, 0.28 V
-over the next samples, where the converged answer (`native_nsub = 64`) is 1.95, 0, 0. The
-photocurrent itself and the modulator drive are not affected. If you read a detector's
-*voltage*, fix `native_nsub` at 64 (the table above shows what that costs).
+over the next samples, where the converged answer (`native_nsub = 64`) is 1.95, 0, 0.
+
+The start of the run is worse still. The transient starts from the SPICE `UIC` state, with
+that node at 0 V. With samples far apart the node then never catches up. With a constant
+photocurrent and samples 20 ns apart, it was still 60 % below its steady 6.6 mV after 200 ns.
+
+The photocurrent itself is not affected, and neither is a modulator drive that does not depend
+on the detector. **But a circuit that reads the detector's voltage, such as a receiver feeding
+a driver or any optoelectronic feedback loop, reads the wrong voltage.** In that case:
+- start from the operating point, `spipe.config['native_uic'] = False`. The node is then right
+  from the first sample: 6.555 mV above, matching Xyce.
+- and raise `native_nsub` until the step is a few times the node's time constant (the table
+  above shows what that costs).
 
 ## The `Circuit` call
 

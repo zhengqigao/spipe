@@ -796,6 +796,60 @@ def build():
     tb.raises('X23.register_checks_kind', lambda: sp.electronic_register('modulator', 'levelx', ".subckt x"),
               ValueError)
 
+    # ---------------- X24 : what the robustness round found ---------------------------------
+    _b24 = [".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 193.1e12 193.1e12 1", ".source 1.0@a1 0.0@a2"]
+    _mod24 = "mzm0 a1 a2 b1 b2 v level1 vpi=2.0 act_l=1e-9"
+    _pds = ["pd1 b1 v1 level1 r0=1", "pd2 b2 v2 level1 r0=1"]
+
+    def _ph24(extra, head=_b24):
+        return sp.Photonic([x + "\n" for x in head + extra])
+    tb.raises('X24.negative_length_refused',
+              lambda: _ph24(["mzi0 a1 a2 b1 b2 theta=0.3 l=-1e-6"] + _pds).simulate(), ValueError,
+              'a negative length made envelope-mode light arrive before the modulator switched')
+    _t24 = torch.linspace(0, 4e-9, 5, dtype=torch.float64)
+    _d24 = torch.tensor([[0.0], [2.0], [2.0], [0.0], [0.0]], dtype=torch.float64)
+    tb.raises('X24.negative_tau_refused', lambda: _ph24(
+        [_mod24 + " tau=-2e-9"] + _pds).simulate(_t24, _d24), ValueError)
+    tb.raises('X24.fractional_order_refused', lambda: _ph24(
+        [_mod24 + " tau=1e-9 order=2.5"] + _pds).simulate(_t24, _d24), ValueError)
+    tb.raises('X24.decreasing_time_refused', lambda: _ph24(
+        [_mod24 + " tau=1e-9"] + _pds).simulate(_t24.flip(0), _d24), ValueError,
+        'a decreasing time axis made the modulator filter grow without bound')
+    tb.raises('X24.nan_drive_refused', lambda: _ph24([_mod24] + _pds).simulate(
+        _t24, torch.full((5, 1), float('nan'), dtype=torch.float64)), ValueError)
+    tb.raises('X24.nan_source_refused', lambda: _ph24(
+        ["wg0 a1 b1 l=1e-6", "pd1 b1 v1 level1 r0=1"],
+        _b24[:2] + [".source nan@a1"]), ValueError)
+    tb.raises('X24.self_loop_named', lambda: _ph24(["wg1 a1 a1 l=1e-6"] + _pds), ValueError)
+    tb.raises('X24.duplicate_mode_refused', lambda: _ph24(
+        [".mode neff=3.0", "wg0 a1 b1 l=1e-6", "pd1 b1 v1 level1 r0=1"]), ValueError)
+    tb.raises('X24.duplicate_detector_refused', lambda: _ph24(
+        ["mzi0 a1 a2 b1 b2 theta=0.3", "pd1 b1 v1 level1 r0=1", "pd1 b2 v2 level1 r0=1"]), ValueError)
+    tb.raises('X24.config_value_checked', lambda: sp.config.__setitem__('max_iter', 0), ValueError)
+    tb.raises('X24.config_dtype_checked',
+              lambda: sp.config.__setitem__('complex_dtype', torch.float64), ValueError,
+              'a real complex_dtype silently discarded the phase')
+
+    # the Circuit file: a line outside the sections, a missing .tran, lower/upper case headers
+    import tempfile as _tf24
+    _src24 = open(_repo_file('examples', 'link_driver_mzm.sp')).read()
+    _dir24 = _tf24.mkdtemp(prefix='tb10_x24_')
+
+    def _deck24(text):
+        path = os.path.join(_dir24, 'd%d.sp' % (abs(hash(text)) % 10 ** 8))
+        open(path, 'w').write(text)
+        return path
+    tb.raises('X24.line_outside_sections_refused',
+              lambda: sp.Circuit(_deck24("* title\nRextra vo1 0 1\n" + _src24), 'native'), RuntimeError,
+              'a device before .electronic used to be dropped without a word')
+    tb.raises('X24.missing_tran_named', lambda: sp.Circuit(_deck24(
+        "\n".join(l for l in _src24.splitlines() if not l.startswith('.tran'))), 'native'), RuntimeError)
+    tb.no_raise('X24.upper_case_headers', lambda: sp.Circuit(_deck24(
+        _src24.replace('.electronic', '.ELECTRONIC').replace('.photonic', '.PHOTONIC')), 'native'))
+    tb.raises('X24.undriven_modulator_node', lambda: sp.Circuit(_deck24(
+        _src24.replace('vdrv level3', 'vdrvv level3')), 'native'), ValueError,
+        "a typo in the drive node gave a modulator stuck at 0 V")
+
     return tb
 
 

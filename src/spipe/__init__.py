@@ -35,8 +35,27 @@ _KNOWN_CONFIG_KEYS = frozenset({
     'envelope_grad_max_bytes'})
 
 
+def _check_config_value(key, value):
+    """Type and range of the settings whose misuse gives a wrong answer rather than an error."""
+    def fail(what):
+        raise ValueError(f"spipe.config[{key!r}] = {value!r}: {what}")
+    if key == 'real_dtype' and value not in (torch.float32, torch.float64):
+        fail("must be torch.float64 (or torch.float32)")
+    if key == 'complex_dtype' and value not in (torch.complex64, torch.complex128):
+        fail("must be torch.complex128 (or torch.complex64); a real dtype discards the phase")
+    if key == 'max_iter' and not (isinstance(value, int) and value >= 1):
+        fail("must be a whole number of iterations >= 1")
+    if key in ('atol', 'rtol', 'fd_step', 'photonic_dense_budget', 'envelope_max_bytes',
+               'envelope_grad_max_bytes'):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not value >= 0:
+            fail("must be a number >= 0")
+    if key == 'native_nsub' and value is not None and not (isinstance(value, int) and value >= 1):
+        fail("must be None (adaptive) or a whole number >= 1")
+
+
 class _Config(dict):
     def __setitem__(self, key, value):
+        _check_config_value(key, value)
         if key not in _KNOWN_CONFIG_KEYS:
             import difflib
             import warnings

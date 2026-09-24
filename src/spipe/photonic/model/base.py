@@ -200,6 +200,17 @@ class Device(nn.Module):
         _check_alpha(getattr(self, '_name', '') or self.__class__.__name__,
                      {**{k: v for k, v in self._optional_attr.items()
                          if k in _SECTION_LENGTHS and v is not None}, **kwargs})
+        # A negative length is a negative delay: in envelope mode the light arrived 100 ps
+        # before the modulator switched, and nothing objected.
+        for key in _SECTION_LENGTHS + ('act_l',):
+            if key in kwargs and kwargs[key] is not None:
+                try:
+                    value = float(kwargs[key])
+                except (TypeError, ValueError):
+                    continue
+                if not value >= 0.0:
+                    raise ValueError(f"{getattr(self, '_name', '') or self.__class__.__name__}: "
+                                     f"{key}={value:g}, but a length must be zero or positive.")
 
         self.params = nn.ParameterDict()
 

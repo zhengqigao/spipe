@@ -213,6 +213,32 @@ def _check_photocurrent_dc_path(elements, blocks, p_content) -> None:
                     f"load, e.g. 'Rload {out} 0 1k', or a transimpedance amplifier.")
 
 
+def _check_drive_nodes(e_content: List[str], p_content: List[str]) -> None:
+    """A modulator's drive node must be something the electronics touch.
+
+    A typo (`mzm0 ... vdrvv level3` for `vdrv`) created a node that only the modulator's own load
+    was attached to: it sat at 0 V, the modulator never switched, and nothing said so.
+    """
+    tokens = set()
+    for line in e_content:
+        stripped = line.split(';')[0].strip()
+        if not stripped or stripped.startswith(('*', '.', '+')):
+            if stripped.startswith('+'):
+                tokens.update(t.lower() for t in stripped[1:].split())
+            continue
+        tokens.update(t.lower().split('=')[0] for t in stripped.split()[1:])
+    for p_line in p_content:
+        if not _is_active_photonic(p_line):
+            continue
+        _, strings, _ = extract(p_line)
+        node = strings[_model_dict['mod'][1]]
+        if node.lower() not in tokens and node.lower() not in _GROUND_NAMES:
+            raise ValueError(
+                f"modulator line '{p_line.strip()}': its drive node {node!r} does not appear in "
+                f"the .electronic section, so nothing drives it (the modulator would sit at 0 V). "
+                f"A typo in the node name?")
+
+
 def _process_spice_wrk_dir(spice_wrk_dir: str) -> None:
     """Make the SPICE scratch directory, keeping the reason it could not be made.
 
@@ -597,6 +623,7 @@ class Electronic(object):
         self.keep_spice = keep_spice
         self.spice_exe = spice_exe
         self.backend = _detect_backend(spice_exe)
+        _check_drive_nodes(self.e_content, self.p_content)
 
         # Xyce's transient *adjoint* returns an identically zero sensitivity block for device
         # parameters (measured on 7.10, see spipe.electronic.sensitivity).  When device

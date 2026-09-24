@@ -661,7 +661,11 @@ def _worst_lte(sys, rec, opts) -> float:
             continue
         idx.append(k)
     if not idx:
-        return 0.0
+        # No three equal steps in a row anywhere -- every interval is broken up by breakpoints --
+        # so the error cannot be estimated. That is not a perfect score: it used to be read as
+        # one, and an 11-sample run of the README deck stopped at 1 step per sample and reported
+        # an inverter on a 0-3 V supply swinging from -0.73 V to 3.44 V. Ask for refinement.
+        return 8.0
     i = torch.tensor(idx, dtype=torch.long)
     d3 = (X[i, :nn] - 3.0 * X[i - 1, :nn] + 3.0 * X[i - 2, :nn] - X[i - 3, :nn]).abs() / 12.0
     ref = torch.maximum(X[i, :nn].abs(), X[i - 1, :nn].abs())

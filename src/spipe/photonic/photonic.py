@@ -1,6 +1,7 @@
 import torch
 from typing import List, Union, Dict, Tuple, Optional
 from spipe.utils import extract, convert
+import math
 import re
 import warnings
 from collections import defaultdict
@@ -268,6 +269,10 @@ def _preprocess_mode(neff, ng=None, wl=1550e-9):
     wl = float(wl)
 
     ng = neff if ng is None else float(ng)
+    for key, value in (('neff', neff), ('ng', ng), ('wl', wl)):
+        if not (math.isfinite(value) and value > 0):
+            raise ValueError(f".mode: {key}={value:g}, but it must be a positive number "
+                             f"({'metres' if key == 'wl' else 'an index'}).")
     return neff, ng, wl
 
 
@@ -394,6 +399,16 @@ def _check_sources_connected(srce_node: Dict, node_has_ele: Dict) -> None:
             "exactly one device uses" + (f"; {where}." if where else " (there is no .source)."))
 
 
+def _check_time_axis(t: torch.Tensor) -> None:
+    """The time axis must be finite and strictly increasing: a decreasing one made a modulator
+    with a response time grow without bound, and was returned as plausible photocurrents."""
+    if not bool(torch.isfinite(t).all()):
+        raise ValueError("The time axis contains NaN or inf.")
+    if t.numel() > 1 and not bool((t[1:] > t[:-1]).all()):
+        raise ValueError("The time axis must be strictly increasing (it is not: "
+                         f"first {float(t[0]):.6g} s, last {float(t[-1]):.6g} s).")
+
+
 #: directives the photonic section understands (``.probe`` is an alias of ``.prob``)
 _DIRECTIVES = {'.mode', '.freq', '.source', '.prob', '.probe', '.end'}
 
@@ -419,6 +434,11 @@ def _logical_lines(content: List[str]) -> List[str]:
 
 def _check_ports(name: str, line: str, strings: List[str], ln: int, rn: int, an: int,
                  kind: str = '') -> None:
+    ports = strings[:ln + rn]
+    repeated = sorted({p for p in ports if ports.count(p) > 1})
+    if repeated:
+        raise ValueError(f"{name}: node {', '.join(repeated)} is connected to two of its own ports "
+                         f"(a self-loop); every port needs its own node.\n  line: {line}")
     """A device line has exactly its ports, then (for a driven device) one electrical node and
     one load level. Anything else used to be dropped without a word: `l=10 um` became 10 metres
     with `um` discarded, and an extra port vanished."""
@@ -600,6 +620,7 @@ class Photonic(object):
 
         cnt = 0
         model_table = _model_info()
+        seen_directives, pd_names = set(), set()
         for line in _logical_lines(self.p_content):
 
             initial, strings, kv_pair = extract(line, convert_numeric=True)
@@ -648,6 +669,12 @@ class Photonic(object):
                                  + f"; the photonic section knows {', '.join(sorted(_DIRECTIVES))}."
                                  + f"\n  line: {line}")
 
+            if not is_device and initial.lower() in ('.mode', '.freq'):
+                if initial.lower() in seen_directives:
+                    raise ValueError(f"{initial} is given twice; give it once (the last one used "
+                                     f"to win silently).\n  line: {line}")
+                seen_directives.add(initial.lower())
+
             if initial.lower() == '.mode':
                 self.mode_info['neff'], self.mode_info['ng'], self.mode_info['wl'] = _preprocess_mode(*strings,
                                                                                                       **kv_pair)
@@ -672,6 +699,9 @@ class Photonic(object):
                                 f".source: cannot read the amplitude {value!r} in "
                                 f"'{line.strip()}': {str(error).rstrip('.')}. Write a number, optionally complex "
                                 f"(0.5+0.2j), e.g. 0.0316@a1.") from None
+                    if not (math.isfinite(amplitude.real) and math.isfinite(amplitude.imag)):
+                        raise ValueError(f".source: the amplitude {value!r} in '{line}' is not "
+                                         f"a finite number.")
                     if node not in self.srce_node.keys():
                         self.srce_node[node] = amplitude
                     else:
@@ -686,6 +716,9 @@ class Photonic(object):
                                      f"between 0 and 1; got {self.laser_info['eff']}.")
 
             if initial.lower().startswith('pd'):
+                if initial.lower() in pd_names:
+                    raise ValueError(f"Detector {initial!r} occurs more than once.")
+                pd_names.add(initial.lower())
                 _check_ports(initial, line, strings, 1, 0, 1, kind='pd')
                 _check_pd_args(initial, kv_pair)
                 self.dout_node.append(strings[0])
@@ -1021,6 +1054,8 @@ class Photonic(object):
         if param_value is not None and not torch.is_tensor(param_value):
             param_value = torch.as_tensor(param_value, dtype=config['real_dtype'],
                                           device=config['device'])
+        if param_value is not None and param_value.numel() and not bool(torch.isfinite(param_value).all()):
+            raise ValueError("The modulator drive contains NaN or inf.")
         # t_value: (time_pin)
         # param_value: (time_pin, dim_pin)
         #
@@ -1045,6 +1080,7 @@ class Photonic(object):
             if t_value is not None:
                 if t_value.ndim != 1:
                     raise RuntimeError(f"t_value must be a 1D tensor, but got shape {t_value.shape}")
+                _check_time_axis(t_value)
                 passive_time = t_value
             t_value, param_value = None, None
         if (param_value is None) and len(self.mod_element.keys()):
@@ -1059,6 +1095,7 @@ class Photonic(object):
         if t_value is not None:
             if t_value.ndim != 1:
                 raise RuntimeError(f"t_value must be a 1D tensor, but got shape {t_value.shape}")
+            _check_time_axis(t_value)
 
             if param_value.ndim != 2:
                 raise RuntimeError(f"param_value must be a 2D tensor, but got shape {param_value.shape}")

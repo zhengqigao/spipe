@@ -73,37 +73,63 @@ def _parse_file(file_path: str) -> Tuple[List[str], List[str], torch.Tensor]:
     '''
 
     p_start, e_start, content, time = -1, -1, [], None
+    tran_line = None
     with open(file_path, 'r') as f:
-        for i, line in enumerate(f.readlines()):
-            line = line.strip()
-            if line.startswith('.electronic'):
-                if e_start == -1:
-                    e_start = i
-                else:
-                    raise RuntimeError(f'.electronic syntax occurs at least twice at line {e_start} and {i}')
-            if line.lower().startswith('.tran'):
-                tokens = line.split('*')[0].split()[1:]
-                start, stop, points = _parse_tran(tokens, line)
-                # real_dtype, not torch's float32 default: this grid is the interpolation abscissa
-                # for the SPICE results and becomes the 'time' attribute of every device model.
-                time = torch.linspace(start, stop, points,
-                                      dtype=config['real_dtype']).to(config['device'])
-                line = ''
-            if line.startswith('.photonic'):
-                if p_start == -1:
-                    p_start = i
-                else:
-                    raise RuntimeError(f'.photonic syntax occurs at least twice at line {p_start} and {i}')
-            content.append(line.split('#')[0] + '\n')
+        lines = f.readlines()
+    # the deck's title, as in SPICE: its first non-blank line
+    title_index = next((i for i, l in enumerate(lines) if l.strip()), -1)
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        low = line.lower()
+        # Section headers are case-insensitive, like the rest of SPICE.
+        if low.startswith('.electronic'):
+            if e_start != -1:
+                raise RuntimeError(f'.electronic occurs twice, at lines {e_start + 1} and {i + 1}.')
+            e_start = i
+        elif low.startswith('.photonic'):
+            if p_start != -1:
+                raise RuntimeError(f'.photonic occurs twice, at lines {p_start + 1} and {i + 1}.')
+            p_start = i
+        elif low.startswith('.tran'):
+            if e_start == -1 or (p_start > e_start):
+                raise RuntimeError(f"line {i + 1}: .tran belongs in the .electronic section.")
+            if tran_line is not None:
+                raise RuntimeError(f"two .tran lines, at lines {tran_line + 1} and {i + 1}; give one.")
+            tran_line = i
+            tokens = line.split('*')[0].split()[1:]
+            start, stop, points = _parse_tran(tokens, line)
+            # real_dtype, not torch's float32 default: this grid is the interpolation abscissa
+            # for the SPICE results and becomes the 'time' attribute of every device model.
+            time = torch.linspace(start, stop, points,
+                                  dtype=config['real_dtype']).to(config['device'])
+            line = ''
+        elif e_start == -1 and p_start == -1 and i != title_index and line \
+                and not line.startswith(('*', '#', ';')):
+            # The first line may be a title, as in SPICE; anything else before the first section used to
+            # be dropped without a word -- an extra resistor there simply did not exist.
+            raise RuntimeError(f"line {i + 1} ({line!r}) is outside both the .electronic and the "
+                               f".photonic section, so it would be ignored. Move it into a "
+                               f"section, or comment it out with '*'.")
+        content.append(line.split('#')[0] + '\n')
 
-
-    if p_start != -1 and e_start != -1:
-        if p_start < e_start:
-            return content[e_start + 1:], content[p_start + 1:e_start], time
-        else:
-            return content[e_start + 1:p_start], content[p_start + 1:], time
-    else:
-        raise RuntimeError(f'.photonic and .electronic syntax must both be used to define circuits.')
+    first = lines[title_index].strip() if title_index >= 0 else ''
+    if first and min(e_start, p_start) != title_index and not first.startswith(('*', '#', ';', '.')) \
+            and re.match(r'[rclvimqdxegfhRCLVIMQDXEGFH]\w*\s+\S+\s+\S+', first):
+        warnings.warn(f"{file_path}: line {title_index + 1} ({first!r}) is read as the deck's title, as in SPICE, "
+                      f"so it is not part of the circuit -- but it looks like a device card. Move "
+                      f"it into a section if it is meant to be one.", stacklevel=3)
+    if p_start == -1 or e_start == -1:
+        raise RuntimeError(f"{file_path}: a Circuit file needs both an .electronic and a .photonic "
+                           f"section (found {'.electronic' if e_start != -1 else 'no .electronic'}, "
+                           f"{'.photonic' if p_start != -1 else 'no .photonic'}). For optics alone, "
+                           f"use Photonic(lines).")
+    if time is None:
+        raise RuntimeError(f"{file_path}: no .tran line. Give the co-simulation time grid in the "
+                           f".electronic section: '.tran <start> <stop> <points>', e.g. "
+                           f"'.tran 0 40n 401'.")
+    if p_start < e_start:
+        return content[e_start + 1:], content[p_start + 1:e_start], time
+    return content[e_start + 1:p_start], content[p_start + 1:], time
 
 
 class FixedPointError(RuntimeError):
@@ -885,8 +911,12 @@ class Circuit(object):
             seed = config['seed'] if seed is None else seed
             generator = torch.Generator(device=config['device'])
             generator.manual_seed(int(seed))
-            param_p = torch.randn(*shape, generator=generator, device=config['device'],
-                                  dtype=config['real_dtype'])
+            # One random value per modulator, the same at every time sample. Drawing a fresh one
+            # per sample started neighbouring samples in different basins of a multistable
+            # loop, and a DC circuit then "jumped" between its stable states from one sample
+            # to the next (0.12 / 0.70 / 2.23 V, with every source constant).
+            param_p = torch.randn(1, shape[1], generator=generator, device=config['device'],
+                                  dtype=config['real_dtype']).expand(shape).clone()
         else:
             param_p = torch.as_tensor(x0, device=config['device'],
                                       dtype=config['real_dtype']).expand(shape).clone()
@@ -1187,7 +1217,8 @@ class Circuit(object):
             seed = config['seed'] if seed is None else seed
             generator = torch.Generator(device=config['device'])
             generator.manual_seed(int(seed))
-            start = torch.randn(*shape, generator=generator, device=config['device'])
+            start = torch.randn(1, shape[1], generator=generator,
+                                device=config['device']).expand(shape).clone()
         else:
             start = torch.as_tensor(x0, device=config['device']).expand(shape).clone()
 

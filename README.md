@@ -207,8 +207,8 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**457 checks, and the exit status is 0 only if every one passed**, so it drops straight
-into CI. `--quick` runs the fast ~310 of them in about a minute and a half. Almost all of it needs
+**475 checks, and the exit status is 0 only if every one passed**, so it drops straight
+into CI. `--quick` runs the fast ~340 of them in about a minute and a half. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:
