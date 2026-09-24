@@ -115,9 +115,29 @@ That V-shape is the signature of an exact analytic gradient: the disagreement is
 difference's, not the adjoint's, and `4.6e-08` is as closely as a finite difference through
 an adaptive-step transient can check it.
 
-**2. Does the unified call change anything?** The same netlist, time grid and loss, run once
-through `Circuit.simulate()` and once by composing the two solvers by hand — the built-in
-circuit engine on the deck `Circuit` generates, then `Photonic` on the resulting drive:
+**2. Does the unified call change anything?** SPIPE is two solvers — a circuit simulator
+for the `.electronic` section and a photonic solver for the `.photonic` section.
+`Circuit.simulate()` coordinates them for you. "By hand" means calling the two yourself, one
+after the other:
+
+```python
+# The unified call: one function does everything.
+ckt = Circuit("examples/link_driver_mzm.sp", spice_exe="native")
+_, _, photocurrent, drive, _ = ckt.simulate()
+
+# By hand: the same two solvers, called in sequence.
+res   = Netlist(electronic_deck).tran(tstep, tstop)          # 1. circuit transient
+drive = res.v("vdrv")                                         # 2. modulator voltage (resampled onto t)
+photocurrent, _, _ = Photonic(photonic_lines).simulate(t, drive)   # 3. the optics
+```
+
+`Circuit.simulate()` does more than that sequence. It inserts the electrical load of each
+modulator and detector into the circuit, so `electronic_deck` above has to be the deck
+`Circuit` builds. It also feeds the photocurrents back into the circuit and iterates until
+the two domains agree, and it differentiates that converged answer with the implicit function
+theorem. On this circuit the photocurrent never reaches the modulator, so one pass in each
+direction is the whole answer and the two routes can be compared directly. If that extra
+machinery introduced any error, they would disagree. Same netlist, time grid and loss:
 
 | | `Circuit.simulate()` | by hand | difference |
 |---|---|---|---|
@@ -126,7 +146,8 @@ circuit engine on the deck `Circuit` generates, then `Photonic` on the resulting
 | `dL/dW` | `29.1957383816` | `29.1957383816` | **`6.8e-15`** (relative) |
 
 Machine precision: the unified call *is* the composition, with nothing approximated along
-the way. It is what you want in practice; composing `Netlist` and `Photonic` yourself is
+the way. Use `Circuit.simulate()` in practice. It is the only route that is correct when a
+photocurrent *does* feed back into a modulator. Composing `Netlist` and `Photonic` yourself is
 only useful when you need to insert something between the two domains.
 
 `test/tb/tb12_end_to_end_grad.py` checks both. It also checks the hand-composed route on a
