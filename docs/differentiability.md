@@ -117,11 +117,47 @@ check it.
 
 `test/tb/tb12_end_to_end_grad.py` repeats this comparison on every run.
 
+## Training photonic parameters
+
+In a photonic circuit on its own (`Photonic`), two kinds of quantity are differentiable:
+- **the modulator drive**: make the drive tensor require grad;
+- **any passive device parameter**, such as a phase shift, a coupler angle, a length or a loss:
+  `Photonic.param` turns the number on the netlist line into a trainable tensor.
+
+This is how you train a programmable mesh:
+
+```python
+ph = Photonic(netlist)
+theta = ph.param('pbum0', 'theta')          # float64 leaf, requires_grad=True
+phi = ph.param('pbum0', 'phi')
+opt = torch.optim.Adam([theta, phi], lr=0.05)
+for step in range(200):
+    opt.zero_grad()
+    photocurrent, probes, _ = ph.simulate()
+    loss = ((photocurrent - target) ** 2).sum()
+    loss.backward()                         # one adjoint solve for every parameter
+    opt.step()
+```
+
+Every output is differentiable, including the complex fields that `.prob` returns. A fidelity
+loss on the field, which sees phase, therefore works as well as one on detected power. The
+gradients match finite differences to about 1e-9, for `pbum`, `ps`, `mzi`, `wg` lengths and
+losses, in circuits with loops.
+
+To set a parameter by hand, use `theta.data.fill_(0.7)` with a Python float. Copying from a
+default `torch.tensor(0.7)` passes through float32 and loses about 1e-8.
+
+Two things are not supported yet:
+- `mode='envelope'`, which raises an error;
+- a `Photonic.param` inside a `Circuit`, which also raises an error. The derivative through
+  the electronic–photonic loop is not implemented for photonic parameters; `.sensparam`
+  electronic parameters are the ones that work there.
+
 ## Two limitations
 
 - Use the **`native`** backend. Xyce's device derivatives are numerical and do not hold up
   on MOSFET widths; HSPICE re-runs finite differences. See [backends.md](backends.md).
 - `mode='envelope'` (see [scope.md](scope.md)) is differentiable with respect to the
   **modulator drive** — matching finite differences to `4e-09` — but not yet with respect to
-  passive device parameters such as a waveguide length. Use the default
-  `mode='quasistatic'` for those.
+  passive device parameters such as a waveguide length. The default `mode='quasistatic'`
+  is (see *Training photonic parameters* above).

@@ -375,6 +375,21 @@ def _check_sources_connected(srce_node: Dict, node_has_ele: Dict) -> None:
             "exactly one device uses" + (f"; {where}." if where else " (there is no .source)."))
 
 
+def _check_device_keys(name: str, class_, kv: Dict) -> None:
+    """Refuse an unknown device parameter when the netlist is read, not at the first simulate()."""
+    import difflib
+    allowed = set(getattr(class_, '_required_attr', [])) | set(getattr(class_, '_optional_attr', {}))
+    user_facing = sorted(allowed - {'time', 'omega', 'act', 'an', 'ln', 'rn'})
+    unknown = [k for k in kv if k not in allowed and not re.fullmatch(r'(da)?coeff\d+', k)]
+    if unknown:
+        hints = []
+        for key in unknown:
+            close = difflib.get_close_matches(key, user_facing, n=1)
+            hints.append(f"{key!r}" + (f" (did you mean {close[0]!r}?)" if close else ""))
+        raise TypeError(f"{name}: unknown parameter {', '.join(hints)}. "
+                        f"Valid parameters: {', '.join(user_facing)}.")
+
+
 #: parameters a pd line accepts, besides the responsivity coefficients r0, r1, ...
 _PD_KEYS = ('wl', 'bw', 'idark', 'temp', 'rload', 'inoise', 'coherent', 'noise', 'dt', 'std')
 
@@ -462,9 +477,14 @@ class Photonic(object):
 
         self.p_content = p_content
         self.need_grads = need_grads
+        #: {(device, parameter): float leaf tensor} made trainable with :meth:`param`
+        self._trainable: Dict[Tuple[str, str], torch.Tensor] = {}
 
         self.circuit_element = dict()
         self.mod_element = dict()
+        #: every device in netlist order: '.prob' directions are defined by the first device
+        #: listed on a node, so nodes must be enumerated in this order, not passive-first
+        self._element_order: List[str] = []
 
         self.mode_info = dict()
         self.omega = None
@@ -509,6 +529,7 @@ class Photonic(object):
                     matched = True
                     ln, rn = v['num_port']
                     an = v['active_port']
+                    _check_device_keys(initial, _model_class(k, v), kv_pair)
 
                     # active iff the model declares an electrical drive port -- see
                     # _entry_is_active(); the old test was initial.startswith('mod')
@@ -516,6 +537,7 @@ class Photonic(object):
                         if initial in self.mod_element.keys():
                             raise RuntimeError(f"Device '{initial}' occurs more than once.")
 
+                        self._element_order.append(initial)
                         self.mod_element[initial] = {'ln': strings[:ln],
                                                      'rn': strings[ln:ln + rn],
                                                      'an': strings[ln + rn:ln + rn + an],
@@ -524,6 +546,7 @@ class Photonic(object):
                         if initial in self.circuit_element.keys():
                             raise RuntimeError(f"Device '{initial}' occurs more than once.")
 
+                        self._element_order.append(initial)
                         self.circuit_element[initial] = {'ln': strings[:ln],
                                                          'rn': strings[ln:ln + rn],
                                                          **kv_pair}
@@ -538,9 +561,22 @@ class Photonic(object):
             if initial.lower() == '.source':
 
                 for s in strings:
+                    if s.count('@') != 1:
+                        raise ValueError(f".source: {s!r} in '{line.strip()}' is not "
+                                         f"<amplitude>@<node>, e.g. 0.0316@a1.")
                     value, node = s.split('@')
+                    try:
+                        amplitude = complex(value)
+                    except ValueError:
+                        try:                              # a scale factor: 31.6u, 0.5k ...
+                            amplitude = complex(convert(value))
+                        except Exception as error:
+                            raise ValueError(
+                                f".source: cannot read the amplitude {value!r} in "
+                                f"'{line.strip()}': {str(error).rstrip('.')}. Write a number, optionally complex "
+                                f"(0.5+0.2j), e.g. 0.0316@a1.") from None
                     if node not in self.srce_node.keys():
-                        self.srce_node[node] = complex(value)
+                        self.srce_node[node] = amplitude
                     else:
                         warnings.warn(f"Node {node} has been assigned source twice.")
                 self.laser_info['power'] = kv_pair.get('power', None)
@@ -760,6 +796,47 @@ class Photonic(object):
 
         return tau
 
+    def param(self, device: str, name: str) -> torch.Tensor:
+        """Make a passive device parameter trainable, and return it as a float leaf tensor.
+
+        ``ph.param('pbum0', 'theta')`` replaces the number written on that netlist line with a
+        tensor that already has ``requires_grad=True``; every later :meth:`simulate` uses it, and
+        ``loss.backward()`` fills its ``.grad`` (default ``mode='quasistatic'``). Change its
+        value in place (``with torch.no_grad(): theta.copy_(...)``) or hand it to an optimiser.
+        A parameter the line does not set starts from the model's default.
+        """
+        matches = [e for e in self.circuit_element if e.lower() == device.lower()]
+        if not matches:
+            active = [e for e in self.mod_element if e.lower() == device.lower()]
+            raise KeyError(
+                f"Photonic.param: {device!r} is " + (
+                    "a modulator; its drive is differentiable already (make the drive tensor "
+                    "require grad), and its other parameters are not trainable."
+                    if active else "not a passive device of this netlist."))
+        ele = matches[0]
+        key = (ele, name)
+        if key in self._trainable:
+            return self._trainable[key]
+        attr = self.circuit_element[ele]
+        entry = _match(ele, _model_info())
+        class_ = _model_class(entry['model_name'], entry)
+        defaults = dict(getattr(class_, '_optional_attr', {}))
+        if name in attr:
+            value = attr[name]
+        elif name in defaults and defaults[name] is not None:
+            value = defaults[name]
+        else:
+            known = sorted(set(attr) | {k for k, v in defaults.items() if v is not None})
+            raise KeyError(f"Photonic.param: {ele} has no parameter {name!r}; it has "
+                           f"{', '.join(known)}.")
+        leaf = torch.tensor(float(value), dtype=config['real_dtype'],
+                            device=config['device']).requires_grad_(True)
+        attr[name] = leaf
+        self._trainable[key] = leaf
+        self._max_group_delay = None
+        self._carrier_group_delay = None
+        return leaf
+
     def simulate(self, t_value: Optional[torch.tensor] = None,
                  param_value: Optional[torch.tensor] = None,
                  mode: str = 'quasistatic',
@@ -815,6 +892,11 @@ class Photonic(object):
                 self.check_quasistatic(float(t_value[1] - t_value[0]))
 
         if mode == 'envelope':
+            if torch.is_grad_enabled() and any(v.requires_grad for v in self._trainable.values()):
+                raise NotImplementedError(
+                    "mode='envelope' is not differentiable with respect to passive device "
+                    "parameters (Photonic.param); use the default mode='quasistatic', or run "
+                    "under torch.no_grad().")
             from .envelope import simulate_envelope          # local: envelope.py imports this module
             res, middle = simulate_envelope(self, t_value, param_value)
             power = self._power_report(res)
@@ -836,12 +918,16 @@ class Photonic(object):
                                         (self.dout_node, self.middle_node),
                                         self.inward_node,
                                         self.outward_node,
-                                        # keep what backward needs whenever the drive carries a
-                                        # graph, as mode='envelope' does; need_grads=True forces it
-                                        self.need_grads or (torch.is_grad_enabled()
-                                                            and param_value is not None
-                                                            and param_value.requires_grad)
+                                        # keep what backward needs whenever the drive or a
+                                        # Photonic.param() tensor carries a graph, as
+                                        # mode='envelope' does; need_grads=True forces it
+                                        self.need_grads or (torch.is_grad_enabled() and (
+                                            (param_value is not None and param_value.requires_grad)
+                                            or any(v.requires_grad for v in self._trainable.values()))),
+                                        tuple(self._trainable.keys()),
+                                        *self._trainable.values(),
                                         )  # res shape (time_pout, len(omega), dim_pout), but here time_pout = time_pin
+        middle = {name: middle[..., i, :] for i, name in enumerate(self.middle_node)}
         power = self._power_report(res)
 
         if passive_time is not None:
@@ -922,7 +1008,9 @@ class Photonic(object):
         inward_node, outward_node = {}, {}
         model_table = _model_info()
 
-        for ele, attr in itertools.chain(self.circuit_element.items(), self.mod_element.items()):
+        elements = {**self.circuit_element, **self.mod_element}
+        for ele in self._element_order:
+            attr = elements[ele]
             assert _match(ele, model_table), f"The model for `{ele}` is not defined."
             assert [len(attr['ln']), len(attr['rn'])] == _match(ele, model_table)['num_port'], \
                 f"The numbers of left and right ports of `{ele}` are not correct."
@@ -971,7 +1059,12 @@ class Simulate(torch.autograd.Function):
                 node_tuple: Tuple,
                 inward_node: Dict,
                 outward_node: Dict,
-                need_grads: bool):
+                need_grads: bool,
+                passive_keys: Tuple = (),
+                *passive_values: torch.Tensor):
+        # passive_keys / passive_values: the (device, parameter) pairs made trainable with
+        # Photonic.param(), and their tensors. The tensors already sit in circuit_element; they
+        # are passed again here only so that autograd routes their gradients to this function.
         try:
             dout_node, prob_node = node_tuple
             # On the configured device: backward index_add_s CUDA tensors with this, and a CPU
@@ -1009,6 +1102,7 @@ class Simulate(torch.autograd.Function):
         b = torch.zeros([1, num_freq, dim, 1], dtype=cdtype, device=device)
 
         model_table = _model_info()
+        passive_rows = {}          # device -> (first row, inward columns, model class)
 
         for node, ele in node_has_ele.items():
             if len(ele) == 1:
@@ -1044,6 +1138,8 @@ class Simulate(torch.autograd.Function):
                     out_cols = outward_ln + outward_rn
                     num_constraint = len(in_cols)
                     rows = range(line_counter, line_counter + num_constraint)
+                    if any(k[0] == ele for k in passive_keys):
+                        passive_rows[ele] = (line_counter, list(in_cols), class_)
 
                     # shape: (time_pin, len(omega), len(ln) + len(rn), len(ln) + len(rn))
                     transfer_matrix = ele_instance.transfer(None)
@@ -1148,18 +1244,21 @@ class Simulate(torch.autograd.Function):
             ctx.inward_node = inward_node
             ctx.outward_node = outward_node
             ctx.node_indices = detect_ind
+            ctx.probe_indices = prob_ind
+            ctx.passive_keys = tuple(passive_keys)
+            ctx.passive_rows = passive_rows
 
         returned_res = x[..., outward_map(detect_ind), 0]  # shape (time_pout, len(omega), dim_pout)
-        middle_res = {prob_node[i]: x[..., [inward_map(node), outward_map(node)], 0] for i, node in enumerate(prob_ind)}
+        # every probe's [inward, outward] pair, (time, len(omega), probes, 2): one tensor rather
+        # than a dict, so that autograd tracks it (a dict output was silently non-differentiable)
+        probe_cols = torch.stack([inward_map(prob_ind), outward_map(prob_ind)], dim=-1).reshape(-1)
+        probe_res = x[..., probe_cols, 0].reshape(num_time, num_freq, len(prob_ind), 2)
 
-        return returned_res, middle_res
+        return returned_res, probe_res
 
     @staticmethod
     def backward(ctx, *grad_output):
-        # grad_output[0] corresponds to dL/dt_value, we know it must be zero.
-        # grad_output[1] corresponds to dL/dreturned_res
-        # grad_output[2] corresponds to dL/dmiddle_res, we know it must be zero.
-        # Because our Loss L=L(returned_res) only.
+        # grad_output[0] is dL/d(detector fields), grad_output[1] dL/d(probe fields).
         if not ctx.need_grads:
             raise RuntimeError("This photonic solve kept nothing for backward: its drive did not "
                                "require grad when it ran. Make the drive tensor require grad before "
@@ -1167,8 +1266,9 @@ class Simulate(torch.autograd.Function):
 
         x, omega, t_value, param_value = ctx.saved_tensors
 
-        grad_return = [None] * 15
-        if param_value is None or not ctx.mod_element:
+        grad_return = [None] * (15 + len(ctx.passive_keys))
+        wants_drive = param_value is not None and bool(ctx.mod_element)
+        if not wants_drive and not ctx.passive_keys:
             return tuple(grad_return)
 
         cdtype, device = config['complex_dtype'], config['device']
@@ -1187,15 +1287,20 @@ class Simulate(torch.autograd.Function):
         detect = outward_map(ctx.node_indices).to(torch.long)
         rhs = torch.zeros((num_time, num_freq, dim, 1), dtype=cdtype, device=device)
         rhs.index_add_(-2, detect, grad_output[0].unsqueeze(-1).to(cdtype))
+        if grad_output[1] is not None and ctx.probe_indices.numel():
+            probes = ctx.probe_indices.to(device)
+            probe_cols = torch.stack([inward_map(probes), outward_map(probes)], dim=-1).reshape(-1)
+            rhs.index_add_(-2, probe_cols.to(torch.long),
+                           grad_output[1].reshape(num_time, num_freq, -1, 1).to(cdtype))
         adjoint_state = ctx.factor.solve_adjoint(rhs).conj().squeeze(-1)   # (time, len(omega), 2 * num_node)
         del rhs
 
         # same dtype the old `einsum(...).real` produced: the real counterpart of complex_dtype
-        grad_param = torch.zeros(param_value.shape, dtype=torch.empty(0, dtype=cdtype).real.dtype,
-                                 device=device)
+        grad_param = (torch.zeros(param_value.shape, dtype=torch.empty(0, dtype=cdtype).real.dtype,
+                                  device=device) if wants_drive else None)
 
-        line_counter = ctx.mod_line
-        for ele, attr in sorted(ctx.mod_element.items()):
+        line_counter = getattr(ctx, 'mod_line', 0)
+        for ele, attr in (sorted(ctx.mod_element.items()) if wants_drive else []):
             for key, value in ctx.model_info.items():
                 if ele.startswith(key):
                     class_ = _model_class(key, value)
@@ -1226,6 +1331,32 @@ class Simulate(torch.autograd.Function):
 
         # grad_output[0] shape (time_pout, len(omega), dim_pout) complex tensor
         # grad_return[1] should be (time_pin, dim_pin)
-        grad_return[1] = grad_param
+        grad_return[1] = grad_param if wants_drive else None
+
+        # Passive device parameters (Photonic.param). A device's rows read S(theta) x_in, so
+        # dL/dtheta = -Re sum q . (dS/dtheta x_in) with the same adjoint state q. S is rebuilt
+        # here for just the devices that hold a trainable tensor, and differentiated by autograd.
+        for ele, (first_row, in_cols, class_) in ctx.passive_rows.items():
+            keys = [k for k in ctx.passive_keys if k[0] == ele]
+            with torch.enable_grad():
+                # the model wraps every attribute in its own nn.Parameter leaf; differentiate
+                # with respect to those (handing it our tensor would be cut off by the wrap)
+                attr = {k: (v.detach() if torch.is_tensor(v) else v)
+                        for k, v in ctx.circuit_element[ele].items()}
+                instance = class_(**{**attr, **ctx.mode_info, 'omega': omega, 'time': t_value})
+                leaves = {name: instance.params[name] for _, name in keys}
+                S = instance.transfer(None)
+                if S.ndim == 3:
+                    S = S.unsqueeze(0)
+                cols = torch.tensor(in_cols, dtype=torch.long, device=x.device)
+                n = len(in_cols)
+                sx = torch.matmul(S.to(cdtype), x[..., cols, :]).squeeze(-1)       # (T, F, n)
+                q = adjoint_state[..., first_row:first_row + n]
+                objective = -(q * sx).sum().real
+                grads = torch.autograd.grad(objective, [leaves[name] for _, name in keys],
+                                            allow_unused=True)
+            for (_, name), g in zip(keys, grads):
+                grad_return[15 + ctx.passive_keys.index((ele, name))] = (
+                    torch.zeros_like(leaves[name]) if g is None else g.to(leaves[name].dtype))
 
         return tuple(grad_return)

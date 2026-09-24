@@ -31,7 +31,7 @@ at exactly those nodes — there is no explicit "connect" statement.
 |---|---|
 | `.mode neff=<n> ng=<n> wl=<m>` | the waveguide mode. `neff` is the effective index (sets phase), `ng` the group index (sets delay), `wl` the reference wavelength in metres. Devices inherit these unless they override them. |
 | `.freq <start> <stop> <count>` | optical frequencies to solve at, in Hz. `count = 1` is a single CW carrier. More than one point means that many **independent** channels — see *Incoherent by default* below. The grid is available afterwards as `Photonic(...).omega`, in rad/s. With `count = 1` only `start` is used. |
-| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. `|A|²` is optical power in **watts** — a detector with `r0=1` (A/W) turns `1.0@a1` into 1 A of photocurrent, so a realistic 1 mW laser is `0.0316@a1`. Optional `power=<W>` and `eff=<0..1>` add a power budget (see below). One amplitude per node, applied to every `.freq` channel alike. |
+| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. A detector turns `|A|²` into `r0·|A|²` amperes. Without a power budget `|A|²` is optical power in **watts**: with `r0=1` (A/W), `1.0@a1` is 1 W of light and 1 A of photocurrent, so a realistic 1 mW laser is `0.0316@a1`. Optional `power=<W>` and `eff=<0..1>` add a power budget, which changes that unit (see *The power budget* below). One amplitude per node, applied to every `.freq` channel alike. |
 | `.prob <node>` | also report the complex optical field at `<node>`, without disturbing it. Each probe returns the two waves at that node: index 0 travels **into**, index 1 **out of**, the first device listed on that node. Without any `.prob` line the `probes` dict comes back empty. |
 
 `.prob` is spelled without the final `e`.
@@ -51,8 +51,8 @@ Passive devices:
 |---|---|---|---|
 | `wg` | 1, 1 | waveguide | `l=` length in metres, `alpha=` field transmission of the whole length (1 = lossless; see *Loss* below) |
 | `ps` | 1, 1 | phase shifter | `ps=` phase in radians (`0.5pi` is accepted) |
-| `mzi` | 2, 2 | Mach–Zehnder interferometer used as a variable coupler. With `l=0` it is a **directional coupler**: field through `cos θ`, cross `sin θ`, so power cross-coupling `κ² = sin²θ` — this is how to build a ring (see below). | `theta=` splitting angle, `l=`, `alpha=` |
-| `pbum` | 2, 2 | programmable building-unit: the 2×2 cell a photonic **mesh** is tiled from — two couplers with phase shifters between them | `theta=`, `phi=`, `l=`, `alpha=`, `cp_left=`, `cp_right=` |
+| `mzi` | 2, 2 | a **coupler** of variable ratio (despite the name, a single coupler, not an interferometer): field through `cos θ`, cross `sin θ`, so power cross-coupling `κ² = sin²θ` — this is how to build a ring (see below). `l=` (default 0) only adds a common propagation phase and loss to both paths. | `theta=` coupling angle in rad, `l=`, `alpha=` |
+| `pbum` | 2, 2 | programmable building-unit: the 2×2 Mach–Zehnder cell a photonic **mesh** is tiled from — coupler, a phase shift on each arm, coupler | `theta=` phase on the upper arm and `phi=` on the lower, in rad; `l=` arm length in m (**required**; 0 is allowed); `alpha=`; `cp_left=`, `cp_right=` coupler angles (default π/4, 50:50). With 50:50 couplers the split is set by `theta − phi`: 0 → all cross, π → all bar. |
 | `splitter1to1` … `splitter1to4` | 1, N | ideal N-way power splitter | — |
 | `wdm1to1`, `wdm1to2`, `wdm1to4` | 1, N | wavelength de-multiplexer (N = 1, 2 or 4; there is no `wdm1to3`): channel *k* of the `.freq` grid leaves by output port *k*. The grid must therefore have **exactly N points** — `wdm1to2` with a single `.freq` point is an error, and says so. | — |
 
@@ -121,7 +121,9 @@ the ring, use `.prob b2`, not a `pd`.
 
 `alpha` is the field transmission of a device's propagation section — the length `l` (or
 `wg_l`, `wgu_l`, `wgl_l`). With that length zero there is no section, and `alpha` has no effect
-(SPIPE warns). For a lossy junction or a coupler's excess loss, add a short `wg` with `alpha`.
+(SPIPE warns). For a lossy junction or a coupler's excess loss, add a `wg` with a negligible
+length and the loss you want, e.g. `wg1 x y l=1e-12 alpha=0.977`: its phase and delay are
+negligible, and `alpha` applies. `alpha` must be between 0 and 1; a negative value is an error.
 `alpha > 1` would be gain; SPIPE warns. Loss is per device, not per unit length: for a
 waveguide of `L` metres with `x` dB/cm, `alpha = 10^(−x · L/0.01 / 20)`.
 
@@ -181,8 +183,18 @@ terms matter, put `coherent=1` and a `bw=` on the `pd` line. See `docs/scope.md`
 ### The power budget
 
 `power=` and `eff=` on the `.source` line turn on the `power` dict that `simulate()`
-returns. `power=` is **per unit of `Σ|A|²`**, not an absolute wattage, so it scales with
-the source amplitudes you wrote.
+returns. They also fix what one unit of `|A|²` means:
+- `power=` is the laser's electrical draw **per unit of `Σ|A|²`**, in watts;
+- `eff=` is its wall-plug efficiency;
+- so one unit of `|A|²` is `power·eff` watts of light.
+
+The paper's decks write `.source 1.0@n1 power=0.005w eff=0.2`: a unit amplitude that stands for
+1 mW of light, from a laser drawing 5 mW.
+
+A detector's `r0=` is then in amperes per that unit. To model a real responsivity of `R` A/W,
+write `r0 = R·power·eff`. Otherwise the detector and the power report describe different
+lasers: `1.0@a1 power=1 eff=0.2` with `r0=1` reports 0.2 W launched, while the detector
+reads 1 A.
 
 ---
 

@@ -92,6 +92,10 @@ photocurrent[:, 0]   # tensor([0.0000, 0.1464, 0.5000, 0.8536, 1.0000])
                      # full-off at 0 V to full-on at V_pi = 2 V
 ```
 
+Everything returned is differentiable with respect to the drive, and with respect to any passive
+parameter you make trainable with `Photonic.param('pbum0', 'theta')`. That is how you train a
+programmable mesh; see [docs/differentiability.md](docs/differentiability.md).
+
 Every directive and device is defined in **[docs/netlist.md](docs/netlist.md)**.
 
 ## Two things you can simulate
@@ -196,8 +200,8 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**421 checks, and the exit status is 0 only if every one passed**, so it drops straight
-into CI. `--quick` runs the fast ~290 of them in under a minute. Almost all of it needs
+**431 checks, and the exit status is 0 only if every one passed**, so it drops straight
+into CI. `--quick` runs the fast ~300 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:

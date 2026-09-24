@@ -599,6 +599,86 @@ def build():
         tb.lt('X19.uic_undetermined_node_starts_at_zero', abs(float(_r19b.v('b')[0])), 1e-9,
               'SPICE UIC: a node nothing sets starts at 0 V')
 
+    # ---------------- X20 : photonic gradients a mesh-training user needs --------------
+    # .prob fields came out of the solve as a dict, which autograd never tracked: a loss using
+    # them got a silently zero (or missing) gradient. Passive parameters (a coupler angle, a
+    # phase shift, a length) had no gradient at all, while the docs said quasistatic mode had.
+    _P20 = sp.Photonic
+    _base20 = [".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 193.0e12 193.2e12 3", ".source 1.0@a1 0.6j@a2"]
+
+    def _mesh20(ps=0.9, theta=0.3, l=12.3e-6):
+        return [x + "\n" for x in _base20 + [
+            f"pbum0 a1 a2 x1 x2 theta={theta!r} phi=0.7 l=5e-6", f"ps0 x1 y1 ps={ps!r}",
+            f"wg0 y1 z1 l={l!r} alpha=0.9", "mzi1 z1 x2 b1 b2 theta=0.4",
+            "pd1 b1 v1 level1 r0=1", "pd2 b2 v2 level1 r0=1", ".prob y1"]]
+
+    def _loss20(ph):
+        I, pr, _ = ph.simulate()
+        return (I * torch.tensor([1.0, 2.0], dtype=torch.float64)).sum() + 3 * pr['y1'][..., 1].real.sum()
+
+    for _dev, _name, _kw, _v0 in (('pbum0', 'theta', 'theta', 0.3), ('ps0', 'ps', 'ps', 0.9),
+                                  ('wg0', 'l', 'l', 12.3e-6)):
+        try:
+            _ph = _P20(_mesh20())
+            _p = _ph.param(_dev, _name)
+            _loss20(_ph).backward()
+            _h = 1e-6 * abs(_v0)
+            _fd = (float(_loss20(_P20(_mesh20(**{_kw: _v0 + _h})))) -
+                   float(_loss20(_P20(_mesh20(**{_kw: _v0 - _h}))))) / (2 * _h)
+            tb.lt(f'X20.passive_grad_{_dev}_{_name}', abs(float(_p.grad) - _fd) / abs(_fd), 1e-6,
+                  f'Photonic.param({_dev!r}, {_name!r}): adjoint {float(_p.grad):.10g} vs FD {_fd:.10g} '
+                  f'(the loss also uses a .prob field)')
+        except Exception as _e:
+            tb.ok(f'X20.passive_grad_{_dev}_{_name}', False, repr(_e))
+
+    try:
+        _mod20 = [x + "\n" for x in _base20[:2] + [".source 1.0@a1 0.0@a2",
+                  "modp0 a1 x vd level1 coeff1=1e-3 act_l=100e-6", "mzi0 x a2 b1 b2 theta=0.25pi",
+                  "pd1 b1 v1 level1 r0=1", "pd2 b2 v2 level1 r0=1", ".prob b1"]]
+        _ph = _P20(_mod20); _t = torch.zeros(1, dtype=torch.float64)
+        _f = lambda v: _ph.simulate(_t, v)[1]['b1'][..., 1].real.sum()
+        _v = torch.tensor([[0.3]], dtype=torch.float64, requires_grad=True)
+        _f(_v).backward()
+        _fd = (float(_f(torch.tensor([[0.3 + 1e-6]], dtype=torch.float64))) -
+               float(_f(torch.tensor([[0.3 - 1e-6]], dtype=torch.float64)))) / 2e-6
+        tb.lt('X20.probe_field_grad_vs_fd', abs(float(_v.grad) - _fd) / abs(_fd), 1e-6,
+              f'd Re(probe)/d drive: adjoint {float(_v.grad):.10g} vs FD {_fd:.10g} (was 0 / no graph)')
+    except Exception as _e:
+        tb.ok('X20.probe_field_grad_vs_fd', False, repr(_e))
+
+    # .prob direction: relative to the first device listed on the node, even a modulator
+    try:
+        def _dir20(first_mod):
+            lines = ["modp0 a1 x vd level1 coeff1=1e-3 act_l=10e-6", "wg0 x b1 l=10e-6 alpha=0.5"]
+            if not first_mod:
+                lines.reverse()
+            ph = _P20([x + "\n" for x in _base20[:2] + [".source 1.0@a1"] + lines +
+                       ["pd1 b1 v1 level1 r0=1", ".prob x"]])
+            f = ph.simulate(torch.zeros(1, dtype=torch.float64),
+                            torch.zeros(1, 1, dtype=torch.float64))[1]['x'][0, 1]
+            return [round(float(abs(f[0])), 6), round(float(abs(f[1])), 6)]
+        tb.ok('X20.prob_direction_follows_netlist_order', _dir20(True) == [0.0, 1.0]
+              and _dir20(False) == [1.0, 0.0],
+              f'modulator listed first -> {_dir20(True)} (want [0, 1]); wg first -> {_dir20(False)}')
+    except Exception as _e:
+        tb.ok('X20.prob_direction_follows_netlist_order', False, repr(_e))
+
+    def _build20(line, src=".source 1.0@a1 0.0@a2"):
+        return _P20([x + "\n" for x in _base20[:2] + [src, line,
+                     "pd1 b1 v1 level1 r0=1", "pd2 b2 v2 level1 r0=1"]])
+    with warnings.catch_warnings(record=True) as _w20:
+        warnings.simplefilter("always")
+        tb.no_raise('X20.mzi_alpha_builds', lambda: _build20("mzi0 a1 a2 b1 b2 theta=0.25pi alpha=0.9").simulate())
+    tb.ok('X20.mzi_alpha_at_l0_warns', any('has no effect' in str(x.message) for x in _w20),
+          'mzi alpha with the default l=0 is ignored, and now says so (wg and pbum already did)')
+    tb.raises('X20.negative_alpha_refused',
+              lambda: _build20("mzi0 a1 a2 b1 b2 theta=0.25pi l=10e-6 alpha=-0.5").simulate(), ValueError)
+    tb.raises('X20.unknown_key_at_construction',
+              lambda: _build20("mzi0 a1 a2 b1 b2 theta=0.3 cp_left=0.1"), TypeError,
+              'refused when the netlist is read, not at the first simulate()')
+    tb.raises('X20.source_amplitude_named', lambda: _build20("mzi0 a1 a2 b1 b2 theta=0.3",
+                                                             ".source 31.6m@a1"), ValueError)
+
     return tb
 
 

@@ -149,6 +149,9 @@ def _check_alpha(model: str, kwargs: Dict) -> None:
         alpha = float(kwargs['alpha'])
     except (TypeError, ValueError):
         return
+    if alpha < 0.0:
+        raise ValueError(f"{model}: alpha={alpha:g} is negative; alpha is the field transmission of "
+                         f"the device's propagation section, between 0 (opaque) and 1 (lossless).")
     if alpha > 1.0:
         warnings.warn(f"{model}: alpha={alpha:g} > 1 is optical gain; alpha is a field "
                       f"transmission and a passive device has alpha <= 1.", stacklevel=4)
@@ -192,7 +195,11 @@ class Device(nn.Module):
                 f"{getattr(self, '_name', '') or self.__class__.__name__}: unknown parameter "
                 f"{', '.join(hints)}. Valid parameters: {', '.join(user_facing)}.")
 
-        _check_alpha(getattr(self, '_name', '') or self.__class__.__name__, kwargs)
+        # a length the line leaves out takes the model's default -- for mzi that is l=0, and its
+        # alpha used to be ignored without the warning wg and pbum give
+        _check_alpha(getattr(self, '_name', '') or self.__class__.__name__,
+                     {**{k: v for k, v in self._optional_attr.items()
+                         if k in _SECTION_LENGTHS and v is not None}, **kwargs})
 
         self.params = nn.ParameterDict()
 

@@ -834,6 +834,13 @@ class Circuit(object):
             does.  ``None``, the default, decides from whether any declared parameter
             requires grad and whether grad is enabled at all.
         """
+        if torch.is_grad_enabled() and any(v.requires_grad
+                                           for v in self.p_circuit._trainable.values()):
+            raise NotImplementedError(
+                "Trainable photonic parameters (Photonic.param) are supported on a Photonic of "
+                "its own, not yet inside a Circuit: the derivative through the electronic-"
+                "photonic loop is not implemented for them. Run under torch.no_grad(), or "
+                "optimise the photonic part with Photonic directly.")
         if differentiable is None:
             differentiable = (
                 torch.is_grad_enabled()

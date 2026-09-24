@@ -87,7 +87,10 @@ bound = 2 * pi / (beta * coeff * act_l)
 torch.manual_seed(0)
 for i in range(num_exp):
     t = torch.linspace(0,1,1).to(config['device'])
-    v = (bound * torch.rand(len(t), len(photonic.mod_element.keys()))).to(config['device']).requires_grad_(True)
+    # float64 drive: a float32 one rounds the finite-difference steps (1 +- 1e-5) * v, and that
+    # rounding alone made the reference below disagree with the exact gradient by up to 12 %
+    v = (bound * torch.rand(len(t), len(photonic.mod_element.keys()), dtype=torch.float64)
+         ).to(config['device']).requires_grad_(True)
 
     # v = 3 / 80.0 * torch.ones(len(t), len(photonic.mod_element.keys()))
     # v[:,-1] = 1.0
@@ -137,6 +140,10 @@ for i in range(num_exp):
     print("relative diff", diff/ v.grad.abs())
     print("v", v)
     print(f"max diff: {diff.max().item()}, mean diff: {diff.mean().item()}, mean incre grad: {incre_grad.abs().mean().item()}")
+    if config['complex_dtype'] == torch.complex64:
+        print("  (complex64, as in the paper: a finite difference of a single-precision solve is only "
+              "good to ~1e-2,\n   which is what limits this comparison. With complex_dtype = "
+              "torch.complex128 the two agree to ~1e-10.)")
 
 end_time2 = time.time()
 outward_ind = 1
@@ -145,7 +152,7 @@ print(f"spipe run time: {(end_time2 - end_time1)/num_exp:.3f} seconds")
 
 plt.figure()
 key = 'n23'
-plt.plot(2 * np.pi * FreeLightSpeed / omega * 1e9, np.abs(middle[key][0, :, outward_ind]), 'blue', linestyle='-',
+plt.plot(2 * np.pi * FreeLightSpeed / omega * 1e9, np.abs(middle[key][0, :, outward_ind].detach()), 'blue', linestyle='-',
          label=f"Spipe middle freq --- {key}")
 plt.xlabel('lambda in free space (nm)')
 plt.legend()
