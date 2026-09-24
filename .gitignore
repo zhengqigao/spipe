@@ -40,3 +40,6 @@ examples/paper/ptc_hspice/dac_model/sky130_fd_pr/
 .DS_Store
 .vscode/
 .idea/
+
+# figures the documentation shows
+!docs/figures/*.png

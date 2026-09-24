@@ -32,36 +32,88 @@ free-carrier plasma dispersion (~0.1 ps) against a 10 Gsps DAC (100 ps).
 
 ### The equations
 
-**Instantaneous (the default, `tau=0`).** The drive sets the phase difference between the two
-arms directly:
-
-```
-Δφ(t) = π · (V(t) − vbias) / vpi
-```
-
-**With a response time (`tau > 0`).** The phase follows the drive through a single-pole lag:
+**First order (`order=1`, the default when `tau` is set).** The phase difference between the
+two arms, `Δφ`, follows the drive through a single lag with time constant `τ`:
 
 ```
 τ · dΔφ/dt + Δφ = π · (V(t) − vbias) / vpi
 ```
 
 After a step in the drive, `Δφ` covers 63 % of the way in one `τ`, 95 % in `3τ` and over 99 %
-in `5τ`. `order=n` passes the drive through `n` such lags in a row, each with the same `τ`;
-the response then rolls off more steeply above the bandwidth. The lag is applied to
-`V − vbias` before anything else. The loss modulation (`dacoeff*`) follows the lagged drive
-too, as carrier density does in a real device.
+in `5τ`.
 
-**On the time grid.** SPIPE applies the lag exactly on the `.tran` samples. The drive value
-at sample `k` is taken to hold over the whole interval before it:
+**Instantaneous (`tau=0`, the default).** With `τ = 0` the equation reduces to
 
 ```
-x[k] = V(t_k) − vbias,    a_k = exp(−(t_k − t_{k−1}) / τ)
-y[k] = a_k · y[k−1] + (1 − a_k) · x[k],    y[0] = x[0]
-Δφ[k] = π · y[k] / vpi
+Δφ(t) = π · (V(t) − vbias) / vpi
 ```
 
-So the run starts settled at its first drive value. Use samples several times finer than `τ`
-to see the shape of an edge, not just its effect on the samples.
+The phase follows the drive at once. This is the model used most often, including in the
+paper (its Assumption 1). It is accurate whenever the drive changes slowly compared with the
+modulator's response.
+
+**General order (`order=n`).** The drive passes through `n` identical lags in a row, each
+feeding the next:
+
+```
+y₀ = π · (V(t) − vbias) / vpi
+τ · dyᵢ/dt + yᵢ = yᵢ₋₁,      i = 1, 2, …, n
+Δφ = yₙ
+```
+
+Equivalently, as one equation in the derivative operator `D = d/dt`:
+
+```
+(τ·D + 1)ⁿ Δφ = π · (V(t) − vbias) / vpi
+```
+
+For `n = 1` this is the first-order equation above; for `n = 2` it is
+`τ²·Δφ'' + 2τ·Δφ' + Δφ = π·(V − vbias)/vpi`.
+- **Frequency response:** `H(s) = 1/(1 + sτ)ⁿ`. The 3 dB bandwidth is
+  `f_3dB = √(2^(1/n) − 1) / (2πτ)`, and the response falls at 20·`n` dB per decade above it.
+- **Step response:** `1 − e^(−t/τ) · Σ_{k=0}^{n−1} (t/τ)^k / k!`.
+
+The lag is applied to `V − vbias` before anything else. The loss modulation (`dacoeff*`) follows
+the lagged drive too, as carrier density does in a real device.
+
+![mzm phase response to a drive step for several orders and time constants](figures/modulator_lag.png)
+
+*Each curve is computed by SPIPE's own modulator model and checked against the step response
+above. The script is [`figures/make_modulator_lag.py`](figures/make_modulator_lag.py).*
+
+- **(a) Same `τ`, higher order:** every added stage delays and slows the response, so the
+  bandwidth drops.
+- **(b) Order 1, larger `τ`:** the same shape, stretched in time.
+- **(c) Same bandwidth (20 GHz), higher order:** this is the comparison that matters when
+  matching a device. Order 1 starts at full speed the instant the drive changes, then creeps
+  toward its final value. A higher order starts gently, rises more steeply in the middle and
+  settles in a similar time.
+
+**When is `order > 1` worth it?** Rarely. `tau` alone captures the main physics: a finite
+modulator bandwidth. A higher order changes the steepness, in two senses:
+- in frequency, a faster roll-off above the bandwidth;
+- in time, the S-shaped edge of panel (c).
+
+This matters only when the drive's bit rate approaches the modulator's bandwidth and you want
+the eye shape and the inter-symbol interference right, typically when fitting a measured
+response that falls faster than 20 dB per decade. Otherwise leave `order=1`.
+
+**On the time grid.** SPIPE applies each lag on the `.tran` samples. The drive value at sample
+`k` is taken to hold over the whole interval before it:
+
+```
+a_k = exp(−(t_k − t_{k−1}) / τ)
+yᵢ[k] = a_k · yᵢ[k−1] + (1 − a_k) · yᵢ₋₁[k],     yᵢ[0] = yᵢ₋₁[0],     i = 1 … n
+Δφ[k] = yₙ[k]
+```
+
+The run therefore starts settled at its first drive value.
+- **`n = 1`:** the result is exact, apart from leading the continuous response by one sample.
+- **`n ≥ 2`:** each later stage sees a sampled input, so the result is accurate to about
+  `0.2–0.35·Δt/τ` for `n = 2…4` (measured).
+
+Use samples several times finer than `τ` to see the shape of an edge, not just its effect on
+the samples.
 
 ### Choosing `τ` and `order`
 
