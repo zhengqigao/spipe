@@ -45,6 +45,38 @@ textbook square law all give `v(d) = 0.138384`, and so does SPIPE.
 It is also the only backend that differentiates exactly, because a device parameter is a
 PyTorch tensor there rather than a number in a text file.
 
+## Time-step accuracy of the built-in engine
+
+The built-in engine splits each output interval of `.tran` into a number of equal internal
+steps. It raises that number until its truncation-error estimate is met, up to a cap: 64 for
+linear circuits, but only **8** for circuits with transistors or diodes, to keep Newton
+solves affordable. A switching circuit whose edges are much faster than the output interval
+can hit that cap before its error target, and the result is then less accurate than the
+engine's own estimate says it should be. It returns anyway.
+
+Measured on `examples/link_driver_mzm.sp`: 40 output samples over 40 ns, 0.2 ns edges, an
+output node with a ~50 ps time constant:
+
+| internal steps per output sample | runtime | worst error in the modulator drive |
+|---|---|---|
+| 8 (the default cap) | 6.3 s | 5.3 mV (a slowly decaying tail after each edge) |
+| 16 | 10.4 s | 0.47 mV |
+| 32 | 19.2 s | 0.11 mV |
+| 64 | 31.6 s | 0.023 mV |
+
+The gradient is exact for whichever discretisation ran. That is why finite differences agree
+with it at every setting. The table is about how close that discretisation is to the
+continuous circuit.
+
+To trade speed for accuracy, fix the number of internal steps:
+
+```python
+spipe.config['native_nsub'] = 32
+```
+
+or give `.tran` more output points, which also lets the modulator see the drive more often.
+A run that rings or shows a slow tail right after a fast edge is the symptom to look for.
+
 ## A trap worth knowing about Xyce
 
 Xyce's **transient adjoint** sensitivity silently returns **all zeros** for device

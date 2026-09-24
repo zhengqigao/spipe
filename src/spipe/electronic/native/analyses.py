@@ -134,6 +134,7 @@ def _ic_pins(sys: MNASystem) -> List[Tuple[int, float]]:
     single-unknown constraint and is skipped.
     """
     pins: Dict[int, float] = {}
+    from_capacitor = set()
     for nm, val in sys.parsed.ic.items():
         try:
             idx = sys.node_index(nm)
@@ -148,14 +149,40 @@ def _ic_pins(sys: MNASystem) -> List[Tuple[int, float]]:
                 ic = float(dev.params["IC"].detach())
                 ai = sys.node_index(dev.nodes[0])
                 bi = sys.node_index(dev.nodes[1])
-                if bi == sys.ground and ai < sys.n_nodes:
-                    pins.setdefault(ai, ic)
-                elif ai == sys.ground and bi < sys.n_nodes:
-                    pins.setdefault(bi, -ic)
+                if bi == sys.ground and ai < sys.n_nodes and ai not in pins:
+                    pins[ai] = ic
+                    from_capacitor.add(ai)
+                elif ai == sys.ground and bi < sys.n_nodes and bi not in pins:
+                    pins[bi] = -ic
+                    from_capacitor.add(bi)
         elif letter == "l":
             for dev in grp.devices:
                 ic = float(dev.params["IC"].detach())
                 pins.setdefault(sys.branch_index(dev.name, 0), ic)
+
+    # A voltage source always wins over a capacitor's initial condition, as in SPICE. A source
+    # (V, or the output of an E or H) fixes the voltage difference between its two terminals;
+    # if a capacitor pin *also* fixes both of them (ground counts as fixed), the node is
+    # determined twice, the source's current is left undetermined, and the operating point is
+    # singular. That is what happened to the simplest possible drive circuit -- an ideal
+    # source on a modulator node, whose load model puts a capacitor there -- while HSPICE and
+    # Xyce ran the same deck. The capacitor pin gives way. An explicit `.ic` never does: that
+    # is the user's own statement, and a conflict there is theirs to see.
+    def _fixed(i: int) -> bool:
+        return i == sys.ground or i in pins
+
+    for grp in sys.groups:
+        if getattr(grp, "letter", "") not in ("v", "e", "h"):
+            continue
+        for dev in grp.devices:
+            a = sys.node_index(dev.nodes[0])
+            b = sys.node_index(dev.nodes[1])
+            if _fixed(a) and _fixed(b):
+                for node in (a, b):
+                    if node in from_capacitor:
+                        del pins[node]
+                        from_capacitor.discard(node)
+                        break
     return sorted(pins.items())
 
 

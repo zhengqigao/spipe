@@ -484,6 +484,24 @@ def build():
         finally:
             sp.config['device'] = torch.device('cpu')
 
+    # ---------------- X15 : an ideal source on a capacitor node, under UIC ---------
+    # UIC pins every grounded capacitor's node to its IC (0 V). Both modulator load models put
+    # a capacitor on the drive node, so an ideal source there fixed that node twice and the
+    # native engine raised "singular MNA matrix" on the simplest possible drive circuit, while
+    # HSPICE and Xyce ran it. In SPICE a source wins over an initial condition.
+    from spipe.electronic.native import Netlist as _N15
+    for _label, _src in (("DC 1 V", "1.0"), ("PWL ramp", "PWL(0 0 10n 4)")):
+        _deck = (f"* ideal source on a capacitor node\nVd n 0 {_src}\nC1 n 0 1p\n"
+                 f"R1 n 0 1k\n.tran 1n 10n\n.end\n")
+        _ok, _res = tb.no_raise(f'X15.uic_source_beats_cap_{_label.split()[0]}',
+                                lambda d=_deck: _N15.from_string(d).tran(1e-9, 1e-8, uic=True),
+                                f'{_label} on a grounded-capacitor node must simulate under UIC')
+        if _ok and _res is not None:
+            _v = [float(x) for x in _res.v('n')]
+            _want = 1.0 if _label.startswith("DC") else 4.0
+            tb.close(f'X15.uic_source_value_{_label.split()[0]}', _v[-1], _want, 1e-9,
+                     detail=f'the source sets the node, not the 0 V capacitor pin ({_label})')
+
     return tb
 
 

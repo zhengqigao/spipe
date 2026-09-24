@@ -45,6 +45,23 @@ def taylor(coeff: List, x: torch.Tensor, x0: Optional[float] = 0) -> torch.Tenso
     return y
 
 
+def require_index_coeffs(kwargs: Dict, model: str) -> None:
+    """Refuse a modulator line that gives no ``coeff0=, coeff1=, ...``.
+
+    Those coefficients are the modulator's whole response. Without them ``collect_coeff``
+    returns ``[0]``, the phase shift is identically zero, and the device silently never
+    modulates -- a plain ``coeff=1e-4`` (no index) was read as exactly that.
+    """
+    if any(re.fullmatch(r'coeff\d+', str(k)) for k in kwargs):
+        return
+    hint = (" A plain 'coeff=' is not read: number them, e.g. 'coeff1=1e-4' for a term linear "
+            "in the drive." if 'coeff' in kwargs else '')
+    raise RuntimeError(
+        f"{model}: no index-change coefficients given. Write them as coeff0=, coeff1=, "
+        f"coeff2=, ... -- the relative effective-index change is "
+        f"dn/neff = coeff0 + coeff1*V + coeff2*V^2 + ...; see docs/netlist.md.{hint}")
+
+
 def collect_coeff(coeff_dict: Dict, key_string: Optional[str] = '', delete: Optional[bool] = False) -> List:
     if key_string:
         pattern = fr'^{key_string}(\d+)'

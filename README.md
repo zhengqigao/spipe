@@ -61,7 +61,7 @@ photocurrent          # tensor([[0.5, 0.5]])  -- half the light to each detector
 |---|---|---|
 | `photocurrent` | `(n_time, n_detectors)` | what each `pd` line measures, in netlist order. Summed over the optical channels, so with N channels a fully-transmitting path reads N, not 1. |
 | `probes` | `{node: (n_time, n_freq, 2)}` | the complex field at nodes you asked about with a `.prob` line. The last axis is `[inward, outward]`. Empty unless you add `.prob`. |
-| `power` | `{name: (n_time,)}` | the laser power budget, in watts. Only filled in if you characterise the laser with `power=` and `eff=` on the `.source` line. |
+| `power` | `{name: (n_time,)}` | the laser power budget, in watts, if you characterise the laser with `power=` and `eff=` on the `.source` line; otherwise just `{'photonic': None}`. |
 
 `n_time` is 1 for a passive circuit like this one.
 
@@ -194,8 +194,8 @@ python test/run_all.py --quick    # the fast subset
 python test/run_all.py --list     # what each bench guards
 ```
 
-**366 checks, and the exit status is 0 only if every one passed**, so it drops straight
-into CI. `--quick` runs the fast ~230 of them in under a minute. Almost all of it needs
+**388 checks, and the exit status is 0 only if every one passed**, so it drops straight
+into CI. `--quick` runs the fast ~250 of them in under a minute. Almost all of it needs
 nothing but PyTorch: the handful of checks that call HSPICE, Xyce, Lumerical INTERCONNECT or a
 GPU **skip themselves** when that tool is not installed, rather than failing — so on a bare
 machine you will see a slightly smaller total and a few skips. A few highlights:

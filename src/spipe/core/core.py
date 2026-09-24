@@ -1,6 +1,7 @@
 from typing import List, Tuple, Optional, Dict, Any, Callable, Mapping
 from spipe.electronic.electronic import Electronic
 from spipe.photonic.photonic import Photonic
+import re
 import torch
 from spipe import config
 from spipe.utils import extract
@@ -12,6 +13,51 @@ __all__ = ['Circuit', 'solve_fixed_point', 'FixedPointError', 'FixedPointDiverge
            'FixedPointNotConverged', 'CouplingJacobianError', 'solve_coupling_system']
 
 logger = logging.getLogger(__name__)
+
+
+_SPICE_SCALE = {'f': 1e-15, 'p': 1e-12, 'n': 1e-9, 'u': 1e-6, 'm': 1e-3,
+                'k': 1e3, 'meg': 1e6, 'g': 1e9, 't': 1e12}
+
+
+def _spice_number(token: str) -> float:
+    """A SPICE number: ``40e-9``, ``40n``, ``40ns``, ``1.5meg``. ``m`` is milli, as in SPICE."""
+    m = re.fullmatch(r'([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-zA-Z]*)', token.strip())
+    if not m:
+        raise ValueError(token)
+    value, suffix = float(m.group(1)), m.group(2).lower()
+    if suffix.startswith('meg'):
+        return value * 1e6
+    if suffix and suffix[0] in _SPICE_SCALE:
+        return value * _SPICE_SCALE[suffix[0]]
+    if suffix in ('', 's'):
+        return value
+    raise ValueError(token)
+
+
+def _parse_tran(tokens: List[str], line: str) -> Tuple[float, float, int]:
+    """``.tran <start> <stop> <points>`` -- SPIPE's form, which is NOT SPICE's.
+
+    SPIPE's ``.tran`` defines the co-simulation time grid: ``points`` evenly spaced samples
+    from ``start`` to ``stop``. SPICE's ``.tran <tstep> <tstop>`` means something else, and
+    reading one as the other silently gives a nonsense grid, so a two-argument line is an
+    error that says so.
+    """
+    usage = ("SPIPE's .tran is '.tran <start> <stop> <points>' -- e.g. '.tran 0 40n 401' for 401 "
+             "samples from 0 to 40 ns. This is not SPICE's '.tran <tstep> <tstop>'.")
+    if len(tokens) != 3:
+        raise ValueError(f"{line.strip()!r}: expected 3 arguments, got {len(tokens)}. {usage}")
+    try:
+        start, stop = _spice_number(tokens[0]), _spice_number(tokens[1])
+    except ValueError as e:
+        raise ValueError(f"{line.strip()!r}: cannot read {e} as a time. {usage}") from None
+    try:
+        points = int(tokens[2])
+    except ValueError:
+        raise ValueError(f"{line.strip()!r}: the third argument must be a whole number of "
+                         f"time points, got {tokens[2]!r}. {usage}") from None
+    if points < 2 or not stop > start:
+        raise ValueError(f"{line.strip()!r}: need stop > start and at least 2 points. {usage}")
+    return start, stop, points
 
 
 def _parse_file(file_path: str) -> Tuple[List[str], List[str], torch.Tensor]:
@@ -35,10 +81,11 @@ def _parse_file(file_path: str) -> Tuple[List[str], List[str], torch.Tensor]:
                 else:
                     raise RuntimeError(f'.electronic syntax occurs at least twice at line {e_start} and {i}')
             if line.lower().startswith('.tran'):
-                initial_strings, strings, kv_pair = extract(line, convert_numeric=True)
+                tokens = line.split('*')[0].split()[1:]
+                start, stop, points = _parse_tran(tokens, line)
                 # real_dtype, not torch's float32 default: this grid is the interpolation abscissa
                 # for the SPICE results and becomes the 'time' attribute of every device model.
-                time = torch.linspace(float(strings[0]), float(strings[1]), int(strings[2]),
+                time = torch.linspace(start, stop, points,
                                       dtype=config['real_dtype']).to(config['device'])
                 line = ''
             if line.startswith('.photonic'):
@@ -328,7 +375,13 @@ def solve_fixed_point(step: Callable[[torch.Tensor], torch.Tensor],
         if residual <= tolerance:
             logger.debug("fixed point converged after %d iteration(s), residual=%.6e <= %.6e",
                          len(residuals), residual, tolerance)
-            return x, _info(True, reference, tolerance)
+            # g(x*) and the direction of the last update come for free here; they let a caller
+            # test the stability of the state it converged to (fixed_point_loop_gain) at the cost
+            # of a single further evaluation.
+            info = _info(True, reference, tolerance)
+            info['g'] = g
+            info['direction'] = (x - prev_x) if prev_x is not None else f
+            return x, info
 
         best = min(residuals)
         if iteration >= 3 and residual > grow_factor * max(best, atol):
@@ -407,6 +460,53 @@ def solve_fixed_point(step: Callable[[torch.Tensor], torch.Tensor],
         f"Raise spipe.config['max_iter'], or -- if the residual is not falling -- reduce the "
         f"feedback loop gain or lower spipe.config['damping'].",
         _info(False, reference, tolerance))
+
+
+def fixed_point_loop_gain(step: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor,
+                          g_x: torch.Tensor, direction: torch.Tensor,
+                          rel_step: float = 1e-3) -> Optional[float]:
+    """The loop gain of ``step`` at the fixed point ``x``, measured along ``direction``.
+
+    ``v . (step(x + h v) - step(x)) / h`` for the unit vector ``v``: the directional derivative
+    of the round-trip map, projected back onto the direction it was taken in. For a scalar loop
+    it is exactly ``g'(x*)``. Above 1 the fixed point is **unstable** along ``v``: a circuit
+    started a little way off moves away from it rather than settling. Anderson acceleration --
+    SPIPE's default -- is a root finder and converges to such points as readily as to stable
+    ones, so a converged answer on its own says nothing about whether a real circuit would sit
+    there. Below 1 the point is contracting along ``v``; that does not prove stability in every
+    other direction. Costs one evaluation of ``step``. Returns None if there is no direction.
+    """
+    v = direction.reshape(-1).to(x.dtype)
+    norm = float(torch.linalg.vector_norm(v))
+    if norm == 0.0 or not math.isfinite(norm):
+        return None
+    v = v / norm
+    scale = float(torch.linalg.vector_norm(x.reshape(-1))) / max(1.0, x.numel()) ** 0.5
+    h = rel_step * max(scale, 1e-6)
+    g2 = step(x + h * v.reshape(x.shape))
+    g2 = torch.as_tensor(g2).to(dtype=x.dtype, device=x.device)
+    return float(torch.dot(v, (g2 - g_x).reshape(-1)) / h)
+
+
+def fixed_point_loop_gain_checked(step: Callable[[torch.Tensor], torch.Tensor],
+                                  x: torch.Tensor, g_x: torch.Tensor, direction: torch.Tensor,
+                                  rel_step: float = 1e-3) -> Tuple[Optional[float], float]:
+    """:func:`fixed_point_loop_gain` at two step sizes, and how far the answer can be trusted.
+
+    A real derivative gives the same gain at any small step. A subprocess SPICE adds a
+    deterministic jitter that does not: a slightly different input changes its adaptive time
+    grid, shifting the output by a small, roughly fixed amount however small the change was, so
+    the "gain" it produces grows as the step shrinks. On a feedback-free HSPICE circuit, whose
+    true loop gain is 0, that alone read as 1.7 at a 1e-3 step. So the gain is measured at
+    ``rel_step`` and at ``10 * rel_step``; the larger step is reported, and the disagreement
+    between the two is the uncertainty. For a deterministic smooth map the two agree to the
+    step's curvature error. Returns ``(gain, uncertainty)``. Costs two evaluations of ``step``.
+    """
+    small = fixed_point_loop_gain(step, x, g_x, direction, rel_step)
+    if small is None:
+        return None, 0.0
+    large = fixed_point_loop_gain(step, x, g_x, direction, 10.0 * rel_step)
+    return large, abs(large - small)
 
 
 def solve_coupling_system(vjp: Callable[[torch.Tensor], torch.Tensor],
@@ -768,6 +868,38 @@ class Circuit(object):
         # `current_param_p` the last `step` call was given, so `state` describes exactly the
         # returned `param_p` -- as it did in the original loop.
         param_p, self.fixed_point_info = solve_fixed_point(step, param_p, config)
+
+        # A feedback-free circuit converges in exactly two evaluations and has nothing to check.
+        # With feedback, the solver may have converged to an unstable state -- a valid fixed
+        # point that no physical circuit would settle into (the middle state of a latch). One
+        # extra round trip measures the loop gain there; `state` is snapshotted around it so the
+        # returned results still describe the converged point, not the probe.
+        if (config.get('fixed_point_stability_check', True)
+                and self.fixed_point_info.get('iters', 0) > 2
+                and self.fixed_point_info.get('g') is not None):
+            saved = dict(state)
+            gain, uncertainty = fixed_point_loop_gain_checked(
+                step, param_p, self.fixed_point_info['g'], self.fixed_point_info['direction'])
+            state.clear()
+            state.update(saved)
+            self.fixed_point_info['loop_gain'] = gain
+            self.fixed_point_info['loop_gain_uncertainty'] = uncertainty
+            # Warn only when the gain is above 1 by more than the simulator's own
+            # non-repeatability can explain -- otherwise a noisy feedback-free circuit is flagged.
+            if gain is not None and gain - uncertainty > 1.0:
+                warnings.warn(
+                    f"The electronic/photonic fixed point converged, but to a state that is "
+                    f"UNSTABLE: the loop gain there, measured along the solver's last step, is "
+                    f"{gain:.4g} (+/- {uncertainty:.2g}) > 1. A real circuit started near this state "
+                    f"would move away "
+                    f"from it, not settle into it -- it is a mathematically valid answer that is "
+                    f"physically unreachable (for a bistable circuit, the middle state). The "
+                    f"default solver (Anderson acceleration) is a root finder and converges to "
+                    f"such points too. To find the state a circuit actually settles into, start "
+                    f"from a different guess with simulate(x0=...), or iterate plainly with "
+                    f"spipe.config['anderson_depth'] = 0. Disable this check with "
+                    f"spipe.config['fixed_point_stability_check'] = False.",
+                    RuntimeWarning, stacklevel=2)
 
         power_e, power_p = state['power_e'], state['power_p']
         self.power_report = {**power_e, **power_p}

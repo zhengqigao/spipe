@@ -262,8 +262,11 @@ def _preprocess_freq(start, stop, steps):
     return 2 * pi * torch.linspace(float(start), float(stop), steps=int(steps), dtype = config['real_dtype'])
 
 def _match(given_str, target_dict):
+    # Case-insensitive, like SPICE: `MZM0` and `mzm0` are the same model. The electronic side
+    # classifies photonic lines through this same function, so the two cannot disagree.
+    given = str(given_str).lower()
     for key, value in target_dict.items():
-        if given_str.startswith(key):
+        if given.startswith(key):
             return value
     return None
 
@@ -367,25 +370,29 @@ def _longest_simple_path(adjacency: Dict, budget: int = 50000, max_depth: int = 
     expansions = [0]
     visited = set()
 
-    def dfs(node, acc, depth):
+    # Light that reaches a node through a device continues into a DIFFERENT device -- it cannot
+    # turn round and go back through the one it just left. Without this rule a single 2x2
+    # device read as a1 -> b1 -> a2 -> b2, three traversals, and a lone 1 mm modulator was
+    # estimated at 3x its real delay, raising a false quasi-static warning.
+    def dfs(node, acc, depth, came_through):
         nonlocal best
         expansions[0] += 1
         if acc > best:
             best = acc
         if expansions[0] >= budget or depth >= max_depth:
             return
-        for nxt, w in adjacency[node]:
-            if nxt in visited:
+        for nxt, w, device in adjacency[node]:
+            if nxt in visited or device == came_through:
                 continue
             visited.add(nxt)
-            dfs(nxt, acc + w, depth + 1)
+            dfs(nxt, acc + w, depth + 1, device)
             visited.discard(nxt)
 
     for start in list(adjacency.keys()):
         if expansions[0] >= budget:
             break
         visited = {start}
-        dfs(start, 0.0, 0)
+        dfs(start, 0.0, 0, None)
 
     return best
 
@@ -432,9 +439,15 @@ class Photonic(object):
 
             initial, strings, kv_pair = extract(line, convert_numeric=True)
 
+            # Device names are case-insensitive, as in SPICE; directives already were.
+            is_device = not initial.startswith('.')
+            if is_device:
+                initial = initial.lower()
 
+            matched = False
             for k, v in model_table.items():
                 if initial.startswith(k):
+                    matched = True
                     ln, rn = v['num_port']
                     an = v['active_port']
 
@@ -477,6 +490,16 @@ class Photonic(object):
             if initial.lower().startswith('pd'):
                 self.dout_node.append(strings[0])
                 self.pd_args.append(kv_pair)
+                matched = True
+
+            # A device line whose name matches no model used to be dropped without a word; the
+            # user then met an unrelated error about detector nodes, or none at all.
+            if is_device and not matched:
+                known = ', '.join(sorted(model_table)) + ', pd'
+                raise RuntimeError(
+                    f"Unknown photonic device {initial!r} in line {line!r}. The start of an "
+                    f"instance name selects the model (e.g. 'mzi0' is an mzi); the known "
+                    f"prefixes are: {known}. See docs/netlist.md.")
 
             if initial.lower().startswith('.prob'):
                 self.middle_node.extend(strings)
@@ -538,8 +561,8 @@ class Photonic(object):
 
             for left in attr['ln']:
                 for right in attr['rn']:
-                    adjacency[left].append((right, delay))
-                    adjacency[right].append((left, delay))
+                    adjacency[left].append((right, delay, ele))
+                    adjacency[right].append((left, delay, ele))
 
         self._max_group_delay = _longest_simple_path(adjacency) if adjacency else 0.0
         return self._max_group_delay
@@ -585,7 +608,8 @@ class Photonic(object):
                 f"optical memory (the passive network's impulse response is convolved with the "
                 f"modulated field instead of being collapsed to its DC value), or shorten the "
                 f"optical paths / increase the time step. "
-                f"Set spipe.config['quasistatic_check'] = False to silence this check.",
+                f"If your time axis is not physical -- for example you are sweeping a DC drive "
+                f"voltage -- this does not apply: set spipe.config['quasistatic_check'] = False.",
                 stacklevel=2)
 
         return tau

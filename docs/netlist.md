@@ -61,10 +61,34 @@ are driven by a voltage:
 
 | prefix | ports | what it is | key parameters |
 |---|---|---|---|
-| `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=`, `vbias=`, `il=` insertion loss in dB, `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=` |
-| `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `an=`, `coeff=`, `act_l=` |
-| `modp` | 1, 1 | phase-only modulator | `an=`, `coeff=`, `act_l=` |
+| `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=` |
+| `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
+| `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
 | `pd` | 1 optical → 1 electrical | photodetector | `r0=` responsivity in A/W, `bw=` bandwidth in Hz, `idark=`, `coherent=1` |
+
+#### `mzm`: insertion loss and extinction ratio
+
+`il=` is the loss of a perfectly balanced device: with the default infinite `er`, peak
+transmission is exactly `10^(−il/10)`. A finite `er` is modelled as an amplitude imbalance
+between the two arms, which is what limits extinction. The weaker arm carries
+`(1 − ε)/(1 + ε)` of the stronger one's amplitude, with `ε = 10^(−er/20)`. That gives exactly
+the requested on/off ratio, and the device stays passive. The imbalance costs light, as it
+does in a real device. With a finite `er`, peak transmission is `10^(−il/10) / (1 + ε)²`:
+about 2.4 dB below `il` at `er = 10`, 0.8 dB at 20, and 0.3 dB at 30.
+
+#### `modm` and `modp`: the index-change coefficients
+
+These two models describe the drive's effect as a polynomial in the drive voltage `V`, one
+numbered coefficient per power:
+
+```
+dn/neff = coeff0 + coeff1*V + coeff2*V^2 + ...
+```
+
+The phase over the active length is then `β · act_l · (dn/neff)` with `β = neff·ω/c`. So the
+coefficients describe the **relative** effective-index change, not `dn` itself: for an index
+change of `dn/dV` per volt, write `coeff1 = (dn/dV) / neff`. Give at least one numbered
+coefficient; a line without any is an error. A plain `coeff=` is not read.
 
 ### Electrical load levels
 
@@ -97,8 +121,31 @@ the source amplitudes you wrote.
 
 ## The `.electronic` section
 
-Ordinary SPICE: device cards, `.model`, `.tran`, `.include`, and so on, in the dialect of
-whichever backend you chose. SPIPE adds exactly one card of its own.
+Ordinary SPICE — device cards, `.model`, `.include` and so on, in the dialect of whichever
+backend you chose — with two exceptions: SPIPE reads `.tran` itself, and adds one card of its
+own, `.sensparam`.
+
+### `.tran` — the co-simulation time grid
+
+```
+.tran <start> <stop> <points>
+```
+
+**This is not SPICE's `.tran <tstep> <tstop>`.** It defines the time samples at which the two
+domains exchange signals: `points` evenly spaced samples from `start` to `stop`, in seconds.
+SPICE suffixes are accepted (`.tran 0 40n 401` is 401 samples over 40 ns; `m` is milli). A
+two-argument, SPICE-style line is an error rather than being misread.
+
+Choose `points` so the grid resolves the fastest edge you care about. The electronic engine
+steps internally as finely as it needs, but the modulator sees the drive only at these samples.
+
+### The starting state
+
+A transient starts from the SPICE `UIC` state: every capacitor with a grounded terminal
+starts at 0 V (or its `IC=`), every inductor at 0 A, unless a `.ic` says otherwise — and a
+voltage source always sets its node. So the first samples show the circuit charging up. The
+built-in engine can start from the DC operating point instead:
+`spipe.config['native_uic'] = False`.
 
 ### `.sensparam` — declaring differentiable device parameters
 

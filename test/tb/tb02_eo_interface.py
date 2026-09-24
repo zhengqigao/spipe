@@ -175,6 +175,31 @@ def build():
               (Sm[0, 0, 2, 0] - Sm[0, 0, 3, 1]).detach().abs().item(), 1e-12,
               'modm must remain the coupler-form abstraction (S11 == S22)')
 
+    # ---------- passivity with a finite extinction ratio -------------------
+    # The ER imbalance was once written as arm amplitudes base*(1 +/- eps), which puts more than
+    # `base` on one arm: at il=0, er=10 dB the device emitted 1.1 W for 1 W in. Nothing above
+    # tests a finite er for passivity (the IL checks use er=inf), which is how it survived.
+    from spipe.photonic.photonic import Photonic as _Ph
+    _t = torch.linspace(0, 1e-8, 81)
+    _v = torch.linspace(-4.0, 4.0, 81, dtype=torch.float64).reshape(-1, 1)
+    for _er in (10.0, 20.0, 30.0):
+        for _il in (0.0, 3.0):
+            _net = [l + "\n" for l in [
+                ".mode neff=2.35 ng=4.0 wl=1550e-9", ".freq 193.1e12 193.1e12 1",
+                ".source 1.0@a1 0.0@a2",
+                f"mzm0 a1 a2 b1 b2 vdrv level1 vpi=2.0 vbias=0.0 il={_il} er={_er}",
+                "pd1 b1 vo1 level1 r0=1.0", "pd2 b2 vo2 level1 r0=1.0"]]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                _pc = _Ph(_net).simulate(_t, _v)[0]
+            _limit = 10 ** (-_il / 10)
+            tb.ok(f'P1.passive_er{_er:g}_il{_il:g}', float(_pc.sum(1).max()) <= _limit + 1e-12,
+                  f"max total output {float(_pc.sum(1).max()):.6f} W must not exceed "
+                  f"10^(-il/10) = {_limit:.6f} W for 1 W in")
+            _ratio = float(_pc[:, 0].max() / _pc[:, 0].min())
+            tb.close(f'P1.er_exact_er{_er:g}_il{_il:g}', 10 * math.log10(_ratio), _er, 1e-9,
+                     detail='the extinction ratio must still be exactly the requested one')
+
     return tb
 
 

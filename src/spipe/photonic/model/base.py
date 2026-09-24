@@ -140,9 +140,21 @@ class Device(nn.Module):
     def __init__(self, **kwargs):
         super(Device, self).__init__()
 
-        assert set(kwargs.keys()) <= set(self._required_attr + list(self._optional_attr.keys()) + ['ln', 'rn']), \
-            (f"The provided attributes for initializing model {self.__class__.__name__} are: {kwargs.keys()}, "
-             f"but expected are: {set(self._required_attr + list(self._optional_attr.keys()) + ['ln', 'rn'])}.")
+        # A real check, not an assert: `python -O` strips asserts, which let a misspelled
+        # parameter through; and the old message dumped every attribute instead of naming the
+        # one that was wrong.
+        allowed = set(self._required_attr + list(self._optional_attr.keys()) + ['ln', 'rn'])
+        unknown = sorted(set(kwargs.keys()) - allowed)
+        if unknown:
+            import difflib
+            user_facing = sorted(allowed - {'time', 'omega', 'act', 'an', 'ln', 'rn'})
+            hints = []
+            for key in unknown:
+                close = difflib.get_close_matches(key, user_facing, n=1)
+                hints.append(f"{key!r}" + (f" (did you mean {close[0]!r}?)" if close else ""))
+            raise TypeError(
+                f"{getattr(self, '_name', '') or self.__class__.__name__}: unknown parameter "
+                f"{', '.join(hints)}. Valid parameters: {', '.join(user_facing)}.")
 
         self.params = nn.ParameterDict()
 

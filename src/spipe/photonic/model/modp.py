@@ -4,7 +4,7 @@ from spipe.photonic.func import FreeLightSpeed, neff
 from typing import Optional, Tuple, Dict, Any
 from spipe import config
 import re
-from ..func import collect_coeff, taylor
+from ..func import collect_coeff, require_index_coeffs, taylor
 
 __all__ = ['ModP']
 
@@ -18,6 +18,7 @@ class ModP(Device):
     _active_port = 1
 
     def __init__(self, **kwargs):
+        require_index_coeffs(kwargs, 'modp')
         kwargs['coeff'] = collect_coeff(kwargs, 'coeff', delete=True)
         super().__init__(**kwargs)
 
@@ -37,9 +38,10 @@ class ModP(Device):
         transfer_wg = (1.0 if self.params['wg_l'] == 0 else self.params['alpha']) * torch.exp(1.j * beta * self.params['wg_l']).to(config['complex_dtype']).reshape(1, -1, 1, 1)
 
         # calculate the active phase shift induced by param['act'] at different param['omega']
-        # ps = 2 * pi * act_l / lambda * (dneff/dv * delta_v) = neff * omega * act_l / c * (dneff/dv * delta_v)
-        # We know beta = neff * omega / c
-        # We assume (dneff/dv * delta_v) = param['coeff'] * param['act'], i.e., linear changes.
+        # ps = beta * act_l * (coeff0 + coeff1*V + ...), with beta = neff * omega / c.
+        # The physical phase is (omega / c) * dneff * act_l, so the polynomial is the
+        # RELATIVE index change dneff/neff, not dneff itself: coeff1 = (dneff/dV)/neff.
+        # That is the convention every shipped netlist is written in; see docs/netlist.md.
         # We can extend it to higher-order changes.
 
         ps = (beta * self.params['act_l']).unsqueeze(0) * \

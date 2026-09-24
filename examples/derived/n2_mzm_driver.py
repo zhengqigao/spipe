@@ -27,13 +27,13 @@ to an *electronic* design variable, and that is what this example measures:
 
 The example sweeps W, reports ``eye(W)``, and forms ``d eye / dW`` by central differences.
 
-A note on where the analytic gradient would come from: SPIPE's photonic solver already supplies
-``d(optical)/d(drive)`` in closed form (``Simulate.backward`` in ``spipe.photonic.photonic``),
-and the Xyce back end can supply ``d(drive)/d(parameter)`` through ``.SENS``
-(``SimulateXyce.backward``).  The HSPICE back end raises ``NotImplementedError`` for the
-backward pass, so with ``--sim hspice`` -- the default, and the only engine these models were
-calibrated on -- the chain rule cannot be closed inside the tool, and this example measures the
-derivative by finite differences instead.  It does not pretend otherwise.
+A note on gradients. This example forms ``d eye / dW`` by central differences because it runs
+on HSPICE by default -- the engine its models were calibrated on -- and HSPICE can only supply
+device-parameter derivatives by finite differences over re-runs. For the analytic gradient,
+declare the parameter with ``.sensparam`` and run on SPIPE's built-in engine
+(``spice_exe='native'``): ``Circuit.simulate()`` then differentiates through the circuit, the
+modulator and the detector exactly. ``examples/link_driver_mzm.sp`` and
+``docs/differentiability.md`` show how.
 
 Run it::
 
@@ -241,9 +241,9 @@ def main() -> int:
         for lo, hi in zip(widths[:-1], widths[1:]):
             local = (results[hi]['eye'] - results[lo]['eye']) / (hi - lo)
             print(f"        {lo:5.1f} -> {hi:5.1f} um : {local * 1e6:10.6f} uA/um")
-    print('      This is a finite difference.  The analytic path needs '
-          'd(drive)/dW from the SPICE\n      back end, which exists for Xyce (.SENS) and not '
-          'for HSPICE; see the module docstring.')
+    print('      This is a finite difference, because HSPICE cannot differentiate device '
+          'parameters.\n      For the exact analytic gradient, declare .sensparam and use '
+          "spice_exe='native'; see the module docstring.")
 
     if args.plot:
         _plot(directory, results)

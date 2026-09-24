@@ -231,14 +231,9 @@ class MZM(Device):
             _NO_DRIVE_WARNED = True
             warnings.warn(
                 "mzm was instantiated without a drive signal ('act'), so it is held at its bias "
-                "point.  This is what happens when an 'mzm...' element is written in a netlist: "
-                "spipe.photonic.photonic routes an element to the *active* code path (which "
-                "supplies 'act' from the electronic solve, consumes the <actnode> <elec_model> "
-                "fields and gives the element a column in param_value) by testing "
-                "`initial.startswith('mod')`, not by looking at the model's `_active_port`.  An "
-                "'mzm' line is therefore parsed as a passive 2x2 element: it simulates correctly, "
-                "but at a fixed drive.  Until that dispatch is keyed on `_active_port`, drive the "
-                "model directly, e.g. MZM(time=t, omega=w, act=v, vpi=..., vbias=...).",
+                "point. In a netlist the drive is supplied for you -- by the circuit in a "
+                "Circuit, or by Photonic.simulate(t, drive). When constructing the model "
+                "directly, pass it: MZM(time=t, omega=w, act=v, vpi=..., vbias=...).",
                 stacklevel=2)
 
         # Collect dacoeff0=, dacoeff1=, ... exactly the way modm/modp collect coeff0=, coeff1=,...
@@ -256,6 +251,17 @@ class MZM(Device):
         for key in _FLOAT_ATTR:
             if kwargs.get(key) is not None:
                 kwargs[key] = float(kwargs[key])
+
+        # Physically meaningless values used to pass silently: vpi=0 gave NaN photocurrents,
+        # and a negative il is optical gain from a passive modulator.
+        if kwargs.get('vpi') is not None and not kwargs['vpi'] > 0:
+            raise ValueError(f"mzm: vpi must be > 0 volts, got {kwargs['vpi']}.")
+        if kwargs.get('il') is not None and kwargs['il'] < 0:
+            raise ValueError(f"mzm: il is an insertion loss in dB and must be >= 0, got "
+                             f"{kwargs['il']} (a negative value would be optical gain).")
+        if kwargs.get('er') is not None and kwargs['er'] < 0:
+            raise ValueError(f"mzm: er is an extinction ratio in dB and must be >= 0, got "
+                             f"{kwargs['er']}.")
         super().__init__(**kwargs)
 
     # ------------------------------------------------------------------ helpers
@@ -295,9 +301,16 @@ class MZM(Device):
         dalpha1 = taylor(dacoeff, u1)
         dalpha2 = taylor(dacoeff, u2)
 
+        # The finite-ER imbalance is taken out of the WEAKER arm, never added to the stronger
+        # one. Only the ratio a2/a1 = (1 - eps)/(1 + eps) sets the on/off ratio, so it stays
+        # exactly 10**(er/10); and neither arm now exceeds `base`, so the device is passive.
+        # (Writing the arms as base*(1 +/- eps) put amplitude 1 + eps on one arm and, at
+        # il = 0, created light: total output 1.1 W from 1 W in at er = 10 dB.) The price is
+        # physical: an imbalanced interferometer loses some light even at its peak, so with a
+        # finite er the peak transmission is 10**(-il/10) / (1 + eps)**2, not 10**(-il/10).
         half_l = 0.5 * self.params['act_l']
-        a1 = base * (1.0 + eps) * torch.exp(-half_l * dalpha1)
-        a2 = base * (1.0 - eps) * torch.exp(-half_l * dalpha2)
+        a1 = base * torch.exp(-half_l * dalpha1)
+        a2 = base * (1.0 - eps) / (1.0 + eps) * torch.exp(-half_l * dalpha2)
         return a1, a2
 
     # ------------------------------------------------------------------ forward

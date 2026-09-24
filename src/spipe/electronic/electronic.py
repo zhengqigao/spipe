@@ -4,6 +4,9 @@ from typing import Tuple, Any, Callable, Dict, Optional, List, Union
 import os
 import sys
 import re
+import shlex
+import shutil
+import subprocess
 from spipe.utils import extract, convert
 import numpy as np
 import torch
@@ -221,6 +224,71 @@ def _xyce_device_separator(spice_exe: str) -> str:
     if match and ('all' in match.group(1).split(',') or 'separator' in match.group(1).split(',')):
         return '.'
     return ':'
+
+
+#: Placeholder in the Xyce sub-circuit list where the sensitivity cards go when they are
+#: wanted. Kept as a marker so the cards keep their position in the deck either way.
+_XYCE_SENS_SLOT = '\x00SPIPE_XYCE_SENS\x00'
+
+#: Environment variable that names the executable for each subprocess back end.
+_SPICE_ENV = {'xyce': 'SPIPE_XYCE', 'hspice': 'SPIPE_HSPICE'}
+#: The executable's usual name on PATH. Xyce's is capitalised.
+_SPICE_BINARY = {'xyce': 'Xyce', 'hspice': 'hspice'}
+
+
+def _resolve_spice_command(spice_exe: str, backend: str) -> List[str]:
+    """Turn ``spice_exe`` into an argument list for :func:`subprocess.run`.
+
+    ``spice_exe`` may be a bare back-end name (``'xyce'``, ``'Xyce'``, ``'hspice'``), a path
+    to the executable, or either followed by extra flags (``'Xyce -hspice-ext all'``). A bare
+    name is looked up as ``$SPIPE_XYCE`` / ``$SPIPE_HSPICE`` first and then on ``PATH`` under
+    the tool's real spelling, so the documented lower-case ``'xyce'`` finds ``Xyce``.
+    """
+    tokens = shlex.split(str(spice_exe))
+    if not tokens:
+        raise RuntimeError(f"spice_exe is empty; expected e.g. 'native', 'xyce' or 'hspice'.")
+    exe, extra = tokens[0], tokens[1:]
+    if os.sep not in exe and exe.lower() == backend:
+        env_name = _SPICE_ENV[backend]
+        from_env = os.environ.get(env_name)
+        if from_env and shutil.which(from_env) is None:
+            raise RuntimeError(
+                f"${env_name}={from_env!r} does not name an executable file. Point it at the "
+                f"{_SPICE_BINARY[backend]} executable (check with `which {_SPICE_BINARY[backend]}`), "
+                f"or unset it to search PATH.")
+        chosen = from_env or shutil.which(_SPICE_BINARY[backend]) or shutil.which(exe)
+        if not chosen:
+            raise RuntimeError(
+                f"spice_exe={spice_exe!r} selects the {backend} back end, but no executable "
+                f"was found: ${env_name} is not set and neither {_SPICE_BINARY[backend]!r} nor "
+                f"{exe!r} is on PATH. Check with `which {_SPICE_BINARY[backend]}`, set "
+                f"${env_name} to the executable, or use spice_exe='native'.")
+        exe = chosen
+    elif shutil.which(exe) is None:
+        raise RuntimeError(
+            f"The {backend} executable {exe!r} (from spice_exe={spice_exe!r}) does not exist or "
+            f"is not executable.")
+    return [exe] + extra
+
+
+def _run_spice(command: List[str], outputs: List[str]) -> None:
+    """Run one SPICE job; raise on failure, never fall back to an earlier run's results.
+
+    Every file in *outputs* is deleted first. SPIPE reads results back from files, so without
+    this a run that failed -- a missing executable, a netlist error, a licence refusal --
+    left the previous run's output in place, and it was read back as though it were new.
+    """
+    for path in outputs:
+        if os.path.exists(path):
+            os.remove(path)
+    proc = subprocess.run(command, capture_output=True, text=True)
+    if proc.returncode != 0:
+        text = (proc.stderr or '') + (proc.stdout or '')
+        tail = '\n'.join(text.strip().splitlines()[-15:])
+        raise RuntimeError(
+            f"{os.path.basename(command[0])} exited with status {proc.returncode}.\n"
+            f"  command: {' '.join(shlex.quote(c) for c in command)}\n"
+            f"  last output:\n{tail}")
 
 
 # -------------------------------------------------------------------------------------------
@@ -667,10 +735,12 @@ class Electronic(object):
             content = rewrite_device_parameters(
                 content, {(d, n): self.sens_values[(d.lower(), n)]
                           for d, n in self.sens_declared})
+        cards = (''.join(getattr(self, '_xyce_sens_cards', []))
+                 if getattr(self, '_deck_with_sens', False) else '')
         with open(self.spice_file_path, 'w') as f:
             f.write('* electronic circuit cut off the photonic part\n')
             f.write(f'.INC {self.param_file_name}\n')
-            f.write(''.join(self.sub_circuit) + '\n')
+            f.write(''.join(self.sub_circuit).replace(_XYCE_SENS_SLOT, cards) + '\n')
             f.write(''.join(content) + '\n')
 
 
@@ -733,9 +803,14 @@ class Electronic(object):
                                         ''.join(param_content) + '\n')
                 self.pd_identifier.append(f"x_pd_{line_index}")
 
-        self.sub_circuit.append(f"\n.PRINT SENS\n")
-        self.sub_circuit.append(
-            f".options sensitivity direct={int(not self.use_adjoint)} adjoint={int(self.use_adjoint)}\n")
+        # The sensitivity cards are kept aside rather than written straight into the deck:
+        # they cost one extra linear solve per parameter per time step (a 400-sample run went
+        # from ~4 s to ~12 min), and only a backward pass reads their output. The deck carries
+        # them only while a gradient is being built -- see _write_spice_deck and simulate.
+        self._xyce_sens_cards = [f"\n.PRINT SENS\n",
+                                 f".options sensitivity direct={int(not self.use_adjoint)} "
+                                 f"adjoint={int(self.use_adjoint)}\n"]
+        self.sub_circuit.append(_XYCE_SENS_SLOT)
         # Two parameter classes in one list (E2.1): the photocurrent PWL values
         # `param_{i}_{j}` (pd_cnt * num_time_ein of them) and the '.sensparam' device
         # parameters (a handful).  Xyce's `.options sensitivity` is global, so both classes
@@ -746,8 +821,8 @@ class Electronic(object):
         sens_names = photocurrent_names + self.xyce_device_param_names()
         if sens_names:
             for node in self.print_order:
-                self.sub_circuit.append(f".sens objfunc={{v({node})}} param=" +
-                                        ','.join(sens_names) + "\n")
+                self._xyce_sens_cards.append(f".sens objfunc={{v({node})}} param=" +
+                                             ','.join(sens_names) + "\n")
 
         for i, content in enumerate(self.e_content):
             if content.lower().startswith('.print tran'):
@@ -876,7 +951,11 @@ class Electronic(object):
         # A '.sensparam' value lives in a torch leaf, so the deck has to be re-rendered with
         # whatever the leaf currently holds before the subprocess reads it.  Without declared
         # device parameters this is the same deck construction already wrote, byte for byte.
-        if self.sens_values:
+        # Xyce's sensitivity cards go into the deck only while a gradient is being built:
+        # a plain run with them paid for every photocurrent sensitivity and then discarded it.
+        want_sens = self.backend == 'xyce' and self.grad_enabled
+        if self.sens_values or want_sens != getattr(self, '_deck_with_sens', False):
+            self._deck_with_sens = want_sens
             self._write_spice_deck()
 
         sens_tensors = tuple(self.sens_values[(d.lower(), n)] for d, n in self.sens_declared)
@@ -893,7 +972,6 @@ class Electronic(object):
                                       self.grad_enabled,
                                       *sens_tensors)
         elif self.backend == 'hspice':
-            print("print order", self.print_order)
             return SimulateHspice.apply(t_value, param_value,
                                         (len(self.power_node) >= 1, len(self.pd_identifier) >= 1, len(self.mod_identifier) >= 1), len(self.print_order), self.prob_res, self.spice_file_path,
                                       self.param_file_path, self.spice_exe,
@@ -992,8 +1070,9 @@ class Electronic(object):
 
         # X4 of the native engine: a co-simulation fixed point re-solves the electronic side
         # every iteration and does not need 1e-8 LTE, so relax the step controller unless the
-        # deck asked for something specific.  1e-6 keeps ~1e-7 waveform accuracy at a fraction
-        # of the internal steps, and the gradient is the gradient of whatever was integrated.
+        # deck asked for something specific. The gradient is the gradient of whatever was
+        # integrated; how close that is to the continuous circuit depends on the step count
+        # (see docs/backends.md, 'Time-step accuracy of the built-in engine').
         self._native.options['lte_reltol'] = float(config.get('native_lte_reltol', 1e-6))
 
         # Step control.  The engine chooses the number of internal sub-steps per print
@@ -1254,12 +1333,13 @@ class SimulateXyce(torch.autograd.Function):
                 for j in range(param_value.shape[1]):
                     f.write(f".PARAM param_{i}_{j}={param_value[i][j]}\n")
 
-        status = os.system(f"{spice_exe} {spice_file_path}")
-
-        print(status)
+        _run_spice(_resolve_spice_command(spice_exe, 'xyce') + [spice_file_path],
+                   [spice_file_path + '.prn', spice_file_path + '.SENS.prn'])
 
         if not os.path.exists(spice_file_path + '.prn'):
-            raise RuntimeError(f"The Spice simulation fails without an transient output file.")
+            raise RuntimeError(
+                f"Xyce finished without error but wrote no transient output "
+                f"({spice_file_path}.prn). Check the deck's .PRINT TRAN card.")
 
         time, result = [], []
 
@@ -1397,12 +1477,12 @@ def _run_hspice(t_value: torch.Tensor,
             for j in range(param_value.shape[1]):
                 f.write(f".PARAM param_{i}_{j}={param_value[i][j]}\n")
 
-    status = os.system(f"{spice_exe} {spice_file_path} -o {spice_file_path}")
-
-    if status > 0:
-        raise RuntimeError(f"The command to run Hspice returns error.")
+    _run_spice(_resolve_spice_command(spice_exe, 'hspice') +
+               [spice_file_path, '-o', spice_file_path],
+               [spice_file_path + '.lis'])
     if not os.path.exists(spice_file_path + '.lis'):
-        raise RuntimeError(f"The Spice simulation fails without an transient output file.")
+        raise RuntimeError(
+            f"HSPICE finished without error but wrote no listing ({spice_file_path}.lis).")
 
     time, result, block_id = None, None, 0
     unit_map = {'time': 's', 'current': 'A', 'voltage': 'v', 'param': 'w'} # we will use parameter in Hspice to calcualte power
@@ -1477,9 +1557,6 @@ class SimulateHspice(torch.autograd.Function):
         ctx.spice_exe = spice_exe
         ctx.param_file_path = param_file_path
 
-        print("in simulate,", prob_res)
-        print("in simulate,", result_interp.shape)
-        print("in simulate,", num_out)
         return (result_interp[:, :num_out],
                 {prob_res[i]: result_interp[:, num_out + i] for i in range(len(prob_res))},
                 {'electronic': result_interp[:, -3] if monitor_power[0] else None,

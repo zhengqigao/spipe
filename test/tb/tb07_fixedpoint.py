@@ -167,6 +167,55 @@ def build():
               f"step called {hits['n']} times with max_iter=3, then raised "
               f"{type(e).__name__} (acceptable)")
 
+    # ---------- stability of the converged state --------------------------
+    # Anderson acceleration is a root finder: it converges to UNSTABLE fixed points as readily
+    # as to stable ones, and SPIPE used to return them as the answer. fixed_point_loop_gain
+    # measures the loop gain at the converged point in one extra evaluation; above 1 the state
+    # is one no physical circuit would settle into. tanh(3x): stable at +/-0.9949 (g' = 0.0305),
+    # unstable at 0 (g' = 3).
+    try:
+        from spipe.core.core import fixed_point_loop_gain
+        _cfg = dict(cfg)
+        _cfg['rtol'], _cfg['atol'] = 1e-10, 1e-12
+        _step = lambda v: torch.tanh(3 * v)
+        for _x0, _want, _label in ((0.05, 3.0, 'unstable_root'), (1.0, None, 'stable_root')):
+            _x, _info = solve_fixed_point(_step, torch.full((4,), _x0, dtype=torch.float64), _cfg)
+            _gain = fixed_point_loop_gain(_step, _x, _info['g'], _info['direction'])
+            _exact = 3.0 / math.cosh(3.0 * float(_x[0])) ** 2
+            # Absolute, not relative: the gain is compared against a threshold of 1, and at the
+            # stable root it is ~0.03, where the finite-difference step's 5e-5 absolute error
+            # reads as a meaningless 1.5e-3 relative one.
+            tb.close(f'L1.loop_gain_{_label}', _gain, _exact, 1e-3, rel=False,
+                     detail=f"x0={_x0} converged to {float(_x[0]):+.6f}; measured vs exact g'(x*)")
+            tb.ok(f'L1.loop_gain_classifies_{_label}', (_gain > 1.0) == (_label == 'unstable_root'),
+                  f"gain {_gain:.4f} must be {'> 1' if _label == 'unstable_root' else '< 1'}")
+    except Exception as e:
+        tb.ok('L1.loop_gain_unstable_root', False, f"{e!r}")
+
+    # A subprocess SPICE shifts its output by a small, fixed amount whenever the input changes
+    # (its adaptive time grid moves). On a feedback-free circuit that jitter, divided by a tiny
+    # probe step, read as a loop gain of 1.7 and raised a false "UNSTABLE" warning. The checked
+    # estimate probes at two step sizes and must see through it -- while still flagging a real
+    # unstable point.
+    try:
+        from spipe.core.core import fixed_point_loop_gain_checked
+        _c = torch.linspace(0.5, 2.0, 50, dtype=torch.float64)
+        _jitter = lambda v: _c + 2e-5 * torch.sign(torch.sin(1e4 * v))
+        _x, _info = solve_fixed_point(_jitter, torch.zeros(50, dtype=torch.float64),
+                                      {'rtol': 1e-3, 'atol': 1e-3, 'max_iter': 50})
+        _g, _u = fixed_point_loop_gain_checked(_jitter, _x, _info['g'], _info['direction'])
+        tb.ok('L1.loop_gain_ignores_simulator_jitter', not (_g - _u > 1.0),
+              f"feedback-free map with SPICE-like jitter: gain {_g:.4f} +/- {_u:.2g} must not "
+              f"be reported as unstable")
+        _x, _info = solve_fixed_point(lambda v: torch.tanh(3 * v),
+                                      torch.full((4,), 0.05, dtype=torch.float64), _cfg)
+        _g, _u = fixed_point_loop_gain_checked(lambda v: torch.tanh(3 * v), _x, _info['g'],
+                                               _info['direction'])
+        tb.ok('L1.checked_gain_still_flags_unstable', _g - _u > 1.0,
+              f"tanh(3x) at 0: gain {_g:.4f} +/- {_u:.2g} must still be flagged")
+    except Exception as e:
+        tb.ok('L1.loop_gain_ignores_simulator_jitter', False, f"{e!r}")
+
     return tb
 
 

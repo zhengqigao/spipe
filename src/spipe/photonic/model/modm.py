@@ -4,7 +4,7 @@ from spipe.photonic.func import FreeLightSpeed, neff
 from typing import Optional, Tuple, Dict, Any
 from spipe import config
 import re
-from ..func import collect_coeff, taylor
+from ..func import collect_coeff, require_index_coeffs, taylor
 
 __all__ = ['ModM']
 
@@ -17,6 +17,7 @@ class ModM(Device):
     _active_port = 1
 
     def __init__(self, **kwargs):
+        require_index_coeffs(kwargs, 'modm')
         kwargs['coeff'] = collect_coeff(kwargs, 'coeff', delete=True)
         super().__init__(**kwargs)
 
@@ -33,9 +34,10 @@ class ModM(Device):
         beta = self.params['omega'] / FreeLightSpeed * neff_func(self.params['omega'])  # propagation constant
 
         # calculate the active phase shift induced by param['act'] at different param['omega']
-        # ps = 2 * pi * act_l / lambda * (dneff/dp * delta_p) = neff * omega * act_l / c * (dneff/dp * delta_p)
-        # We know beta = neff * omega / c
-        # We assume (dneff/dp * delta_p) = param['coeff'] * param['act'], i.e., linear changes.
+        # ps = beta * act_l * (coeff0 + coeff1*V + ...), with beta = neff * omega / c.
+        # The physical phase is (omega / c) * dneff * act_l, so the polynomial is the
+        # RELATIVE index change dneff/neff, not dneff itself: coeff1 = (dneff/dV)/neff.
+        # That is the convention every shipped netlist is written in; see docs/netlist.md.
         # We can extend it to more complicated cases
 
         ps = (beta * self.params['act_l']).unsqueeze(0) * \

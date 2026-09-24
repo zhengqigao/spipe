@@ -83,6 +83,16 @@ def load_mesh_builder():
     two scripts cannot drift apart.
     """
     os.environ.setdefault('MPLBACKEND', 'Agg')
+    # Run INTERCONNECT in a scratch copy of the project folder, never in the repository:
+    # INTERCONNECT rewrites the project library it loads (interconnect/untitled.ich), which
+    # otherwise modifies a tracked file on every live run. main1_mesh reads the folder from
+    # $SPIPE_INTERCONNECT_DIR at import time, so it has to be set before the import.
+    if not os.environ.get('SPIPE_INTERCONNECT_DIR'):
+        import shutil, tempfile
+        scratch = tempfile.mkdtemp(prefix='spipe_interconnect_')
+        shutil.copytree(os.path.join(os.path.dirname(MESH_STUDY), 'interconnect'),
+                        os.path.join(scratch, 'interconnect'))
+        os.environ['SPIPE_INTERCONNECT_DIR'] = os.path.join(scratch, 'interconnect')
     spec = importlib.util.spec_from_file_location('_mesh_study', MESH_STUDY)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
