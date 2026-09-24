@@ -121,9 +121,9 @@ circuit engine on the deck `Circuit` generates, then `Photonic` on the resulting
 
 | | `Circuit.simulate()` | by hand | difference |
 |---|---|---|---|
-| modulator drive | | | `4.4e-16` |
-| loss `L` | `4.806542598606` | `4.806542598606` | `1.9e-16` |
-| `dL/dW` | `29.1957383816` | `29.1957383816` | **`6.8e-15`** |
+| modulator drive — a waveform, 40 time points | swings −0.004 V to 2.998 V | same | largest at any point: `4.4e-16` V (absolute) |
+| loss `L` | `4.806542598606` | `4.806542598606` | `1.9e-16` (relative) |
+| `dL/dW` | `29.1957383816` | `29.1957383816` | **`6.8e-15`** (relative) |
 
 Machine precision: the unified call *is* the composition, with nothing approximated along
 the way. It is what you want in practice; composing `Netlist` and `Photonic` yourself is
