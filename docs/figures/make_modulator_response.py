@@ -1,15 +1,15 @@
-"""Draw docs/figures/modulator_lag.png: the mzm phase response to a drive step, for several
+"""Draw docs/figures/modulator_response.png: the mzm phase response to a drive step, for several
 filter orders n and time constants tau.
 
 Every curve is computed by SPIPE's own modulator model (MZM._drive, the code path a simulation
-uses), and checked against the analytic step response of n cascaded identical lags,
+uses), and checked against the analytic step response of n cascaded identical first-order stages,
 1 - exp(-t/tau) * sum_{k<n} (t/tau)^k / k!, before it is drawn. On the time grid the drive
 value at a sample is taken to hold over the interval before it, so the discrete response leads
 the continuous one by exactly one sample: with that allowed for, n = 1 is exact (to 1e-15), and
 n >= 2 agrees to about 0.2-0.35 * dt / tau -- the scheme is first-order accurate in dt/tau there, so
 the samples must be much finer than tau (here dt = 0.05 ps).
 
-Run:  python docs/figures/make_modulator_lag.py
+Run:  python docs/figures/make_modulator_response.py
 """
 import math
 import os
@@ -35,7 +35,7 @@ def response(tau, order):
                         torch.tensor(0.0, dtype=torch.float64))
     model = MZM(time=t, omega=torch.tensor([2 * math.pi * 193.1e12], dtype=torch.float64),
                 act=drive, vpi=VPI, tau=tau, order=order)
-    dphi = math.pi * model._drive().detach() / VPI           # the lagged Δφ, in rad
+    dphi = math.pi * model._drive().detach() / VPI           # the filtered Δφ, in rad
     return (t - STEP_AT).numpy() * 1e12, (dphi / math.pi).numpy()
 
 
@@ -46,7 +46,7 @@ def analytic(t_ps, tau, order):
 
 
 def bandwidth_tau(f3db, order):
-    """tau giving a 3 dB bandwidth f3db with n cascaded identical lags."""
+    """tau giving a 3 dB bandwidth f3db with n cascaded identical first-order stages."""
     return math.sqrt(2 ** (1 / order) - 1) / (2 * math.pi * f3db)
 
 
@@ -87,6 +87,6 @@ axes[0].set_ylabel('Δφ / Δφ_final')
 fig.suptitle('mzm phase response to a step in the drive:  (τ·d/dt + 1)ⁿ Δφ = π·(V − vbias)/vpi',
              fontsize=11.5)
 fig.tight_layout()
-out = os.path.join(HERE, 'modulator_lag.png')
+out = os.path.join(HERE, 'modulator_response.png')
 fig.savefig(out, dpi=150)
-print(f"wrote {out}; every curve matches the analytic step response of n cascaded lags")
+print(f"wrote {out}; every curve matches the analytic step response of n cascaded first-order stages")

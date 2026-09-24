@@ -1,25 +1,7 @@
 # Scope: what SPIPE models, and where it stops
 
-SPIPE's core formulation is exact. This document states precisely where the *physics*
-assumptions bind, so you can tell whether a given circuit is inside the valid regime.
-
-## The core is exact
-
-For a photonic circuit with `N_p` ports, SPIPE associates two unknowns with every port —
-one wave in each direction — and assembles one linear constraint per device port
-(`out = S · in`) plus one boundary condition per dangling node. The resulting system is
-square by construction and is solved directly.
-
-Two consequences worth stating:
-
-- **Loops are handled exactly.** The direct solve sums the infinite series of round trips,
-  so a recirculating mesh needs no iteration and no truncation.
-- **Energy is conserved to solver precision.** On a lossless network — including one with
-  optical feedback — total detected power equals injected power to machine zero in
-  `complex128`.
-
-The gradient is likewise exact: differentiating `A x = b` gives `dx/dθ = −A⁻¹ (dA/dθ) x`,
-which matches central finite differences to ~1e-10 in double precision.
+This document states precisely where the *physics* assumptions bind, so you can tell whether a
+given circuit is inside the valid regime.
 
 ## Assumption 1: the modulator responds instantly
 
@@ -27,13 +9,14 @@ Stated in the paper. A drive `v(t)` produces phase `φ(t)` with no transient. Va
 modulator's own response time is far shorter than the drive's timescale — true for
 free-carrier plasma dispersion (~0.1 ps) against a 10 Gsps DAC (100 ps).
 
-**Lifted by:** the `mzm` model's `tau=` parameter, which gives the phase a first-order
-(or `order=n` cascaded) lag. `tau=0` reproduces the instantaneous result bit-for-bit.
+**Resolved by:** two parameters of the `mzm` model, `tau` and `order`, which give the
+modulator a finite response time. With them the modulator model differs from the one in the
+original paper. `tau=0` (the default) reproduces the paper's instantaneous model bit for bit.
 
 ### The equations
 
 **First order (`order=1`, the default when `tau` is set).** The phase difference between the
-two arms, `Δφ`, follows the drive through a single lag with time constant `τ`:
+two arms, `Δφ`, follows the drive with a first-order response of time constant `τ`:
 
 ```
 τ · dΔφ/dt + Δφ = π · (V(t) − vbias) / vpi
@@ -52,72 +35,21 @@ The phase follows the drive at once. This is the model used most often, includin
 paper (its Assumption 1). It is accurate whenever the drive changes slowly compared with the
 modulator's response.
 
-**General order (`order=n`).** The drive passes through `n` identical lags in a row, each
-feeding the next:
+**General order (`order=n`).**
 
 ```
-y₀ = π · (V(t) − vbias) / vpi
-τ · dyᵢ/dt + yᵢ = yᵢ₋₁,      i = 1, 2, …, n
-Δφ = yₙ
+(τ·d/dt + 1)ⁿ Δφ = π · (V(t) − vbias) / vpi
 ```
 
-Equivalently, as one equation in the derivative operator `D = d/dt`:
+With `n = 1` this is the first-order equation above. The response is applied to `V − vbias`
+before anything else, and the loss modulation (`dacoeff*`) follows the same filtered drive, as
+carrier density does in a real device.
 
-```
-(τ·D + 1)ⁿ Δφ = π · (V(t) − vbias) / vpi
-```
-
-For `n = 1` this is the first-order equation above; for `n = 2` it is
-`τ²·Δφ'' + 2τ·Δφ' + Δφ = π·(V − vbias)/vpi`.
-- **Frequency response:** `H(s) = 1/(1 + sτ)ⁿ`. The 3 dB bandwidth is
-  `f_3dB = √(2^(1/n) − 1) / (2πτ)`, and the response falls at 20·`n` dB per decade above it.
-- **Step response:** `1 − e^(−t/τ) · Σ_{k=0}^{n−1} (t/τ)^k / k!`.
-
-The lag is applied to `V − vbias` before anything else. The loss modulation (`dacoeff*`) follows
-the lagged drive too, as carrier density does in a real device.
-
-![mzm phase response to a drive step for several orders and time constants](figures/modulator_lag.png)
-
-*Each curve is computed by SPIPE's own modulator model and checked against the step response
-above. The script is [`figures/make_modulator_lag.py`](figures/make_modulator_lag.py).*
-
-- **(a) Same `τ`, higher order:** every added stage delays and slows the response, so the
-  bandwidth drops.
-- **(b) Order 1, larger `τ`:** the same shape, stretched in time.
-- **(c) Same bandwidth (20 GHz), higher order:** this is the comparison that matters when
-  matching a device. Order 1 starts at full speed the instant the drive changes, then creeps
-  toward its final value. A higher order starts gently, rises more steeply in the middle and
-  settles in a similar time.
-
-**When is `order > 1` worth it?** Rarely. `tau` alone captures the main physics: a finite
-modulator bandwidth. A higher order changes the steepness, in two senses:
-- in frequency, a faster roll-off above the bandwidth;
-- in time, the S-shaped edge of panel (c).
-
-This matters only when the drive's bit rate approaches the modulator's bandwidth and you want
-the eye shape and the inter-symbol interference right, typically when fitting a measured
-response that falls faster than 20 dB per decade. Otherwise leave `order=1`.
-
-**On the time grid.** SPIPE applies each lag on the `.tran` samples. The drive value at sample
-`k` is taken to hold over the whole interval before it:
-
-```
-a_k = exp(−(t_k − t_{k−1}) / τ)
-yᵢ[k] = a_k · yᵢ[k−1] + (1 − a_k) · yᵢ₋₁[k],     yᵢ[0] = yᵢ₋₁[0],     i = 1 … n
-Δφ[k] = yₙ[k]
-```
-
-The run therefore starts settled at its first drive value.
-- **`n = 1`:** the result is exact, apart from leading the continuous response by one sample.
-- **`n ≥ 2`:** each later stage sees a sampled input, so the result is accurate to about
-  `0.2–0.35·Δt/τ` for `n = 2…4` (measured).
-
-Use samples several times finer than `τ` to see the shape of an edge, not just its effect on
-the samples.
+![mzm phase response to a drive step for several orders and time constants](figures/modulator_response.png)
 
 ### Choosing `τ` and `order`
 
-`τ` sets the modulator's electro-optic bandwidth. For a single lag,
+`τ` sets the modulator's electro-optic bandwidth. For `order=1`,
 
 ```
 f_3dB = 1 / (2π τ)        i.e.   τ = 1 / (2π f_3dB)
@@ -136,37 +68,6 @@ With `order=n`, the same `τ` gives a lower bandwidth,
 then `τ` to match its 3 dB point. When the modulator's bandwidth is set mainly by its RC
 (the driver charging the junction), model that on the electrical side instead, with the
 `level3` load. `tau=` is for the optical response of the device itself.
-
-### Reduced cases
-
-**The default `mzm`** has `tau=0`, `chirp=0`, 50:50 couplers, `il=0`, `er` infinite and no
-loss modulation. For light entering the first input, it reduces to
-
-```
-first output  (bar):    sin²(Δφ / 2)
-second output (cross):  cos²(Δφ / 2),        Δφ = π · (V − vbias) / vpi
-```
-
-At `V = vbias` all the light leaves by the second output; at `V = vbias + vpi`, by the first.
-`vpi` is exactly the swing from full-on to full-off.
-
-**The paper's case.** The paper's decks use `modm`, its Eq. 5: a variable-ratio coupler whose
-angle is set by the drive. It responds instantly: `modm` has no `tau=`, and Assumption 1 holds
-exactly. Its phase is a polynomial in the drive:
-
-```
-φ(V) = β · act_l · (coeff0 + coeff1·V + coeff2·V² + …),     β = 2π · neff · f / c
-first output  (through):  cos²(φ)
-second output (cross):    sin²(φ)
-```
-
-With the paper's values, `coeff1 = 1e-3`, `act_l = 200 µm`, `neff = 2.35` and `f = 193.5 THz`:
-`φ = 1.906 rad/V · V`. The light moves fully to the cross port at `V = 0.824 V`, and at 0.3 V
-71 % stays in the through port. The paper's time steps (nanoseconds, a 0.1 Gsps DAC) are far
-longer than any free-carrier response (~0.1 ps), which is why the instantaneous model is
-accurate there. To give that switch a finite speed, model it with `mzm` and `tau=` instead.
-Note that `modm` and `mzm` differ in `V_π` by 2× and in bias point by π/2 (see
-[netlist.md](netlist.md)).
 
 ## Assumption 2: the photonic network settles instantly
 
@@ -189,7 +90,7 @@ second one is what sees a resonator, whose photon lifetime is its round trip tim
 finesse — on a high-Q ring, 2.2 ns where the path length alone suggests 1.7 ps. Disable with
 `config['quasistatic_check'] = False`.
 
-**Lifted by:** `simulate(..., mode='envelope')`. The passive sub-network is linear and
+**Resolved by:** `simulate(..., mode='envelope')`. The passive sub-network is linear and
 time-invariant, so its transfer `H(ω)` over the `.freq` band is computed once and inverse-
 FFT'd into an impulse response; the detected field is then a convolution, so light arriving
 at time `t` carries the modulator state from `t − τ`. This upgrades the assumption from
