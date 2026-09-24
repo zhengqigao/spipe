@@ -44,8 +44,11 @@ The failure mode is **structural, not gradual**. With zero optical memory there 
 delay, so resonator ring-up, delay-set oscillation and pattern-dependent ISI are not
 approximated badly — they are absent from the model.
 
-**Guarded by:** `Photonic.check_quasistatic(dt)` estimates the maximum group delay in the
-network and warns, with both numbers, when it exceeds `0.1·dt`. Disable with
+**Guarded by:** `Photonic.check_quasistatic(dt)`, which warns, with both numbers, when the
+network's delay exceeds `0.1·dt`. It uses the larger of two estimates: the longest light path
+(delay lines, meshes), and the group delay `dφ/dω` measured at the simulated carriers. The
+second one is what sees a resonator, whose photon lifetime is its round trip times its
+finesse — on a high-Q ring, 2.2 ns where the path length alone suggests 1.7 ps. Disable with
 `config['quasistatic_check'] = False`.
 
 **Lifted by:** `simulate(..., mode='envelope')`. The passive sub-network is linear and
@@ -61,6 +64,28 @@ It is differentiable with respect to the **modulator drive**: `backward()` throu
 envelope-mode result fills in `drive.grad`, matching finite differences to `4e-09`. It is
 not yet differentiable with respect to *passive* device parameters (a waveguide length,
 a coupler angle) — use `mode='quasistatic'` for those.
+
+### A known limitation: modulators inside optical loops
+
+Envelope mode represents a delay shorter than the time step with a fractional-delay kernel.
+Inside a feedback loop — **a modulator inside a ring**, say — that kernel can act as gain at
+some carriers, and the calculation goes unstable. The ring's own physics is fine (the
+steady-state solve is exact); the time-domain method is what fails. Measured on a ring with a
+1.68 ps round trip: at 1 ps steps the output grew to 464× the input power; at 2 ps steps the
+centre carrier looked fine while carriers across the band reached 10¹⁵×.
+
+SPIPE checks for this rather than returning such numbers:
+
+- **Runaway** is an error. If, at the end of the record, the detected power is more than ten
+  times both the launched power and the circuit's own steady-state output, the run raises.
+  (A resonator *can* briefly emit more than it receives — it releases stored energy when the
+  input changes — so the test is runaway growth, not instantaneous power.)
+- **Failure to settle** is a warning. Once the drive has been constant for longer than the
+  network's memory, the result must equal the quasi-static steady state; if it differs by more
+  than 0.1 %, SPIPE says so, with the size of the discrepancy.
+
+Modulators *outside* a loop — driving a ring from outside, or feeding a delay line — are the
+case envelope mode is built for, and they are unaffected.
 
 ## Assumption 3: the frequency axis is incoherent channels
 

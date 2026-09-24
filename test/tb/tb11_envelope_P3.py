@@ -268,6 +268,49 @@ def build():
     except Exception as e:
         tb.ok('ENV.grad_reaches_drive', False, f"{e!r}")
 
+    # ---------------- envelope mode must not return runaway or unsettled results ------------
+    # A modulator inside a ring, sampled at a step shorter than the round trip, drove the
+    # envelope recursion unstable: 464x the launched power at the end of the record, returned
+    # with no error. (A resonator CAN briefly emit more than it receives -- stored energy --
+    # so the test is runaway growth, not instantaneous passivity.)
+    import warnings as _w2
+    from spipe.photonic.photonic import Photonic as _Ph2
+    _c = 299792458.0
+    _L = 2 * math.pi * 20e-6
+    _fres = 193.10292e12
+
+    def _ring(t_amp, a_amp, nfreq, band, coeff):
+        return [l + "\n" for l in [
+            ".mode neff=2.35 ng=4.0 wl=1550e-9",
+            f".freq {_fres - band / 2} {_fres + band / 2} {nfreq}", ".source 1.0@a1",
+            f"mzi0 a1 a2 b1 b2 theta={math.acos(t_amp)}", f"wg0 b2 x l={_L} alpha={a_amp}",
+            f"modp0 x a2 vdrv level1 coeff1={coeff} act_l=10e-6", "pd1 b1 vo level1 r0=1.0"]]
+
+    _T = 301
+    _tt = torch.arange(_T, dtype=torch.float64) * 1e-12
+    _drv = torch.cat([torch.ones(_T // 6, 1), torch.zeros(_T - _T // 6, 1)]).double()
+    tb.raises('ENV.runaway_is_an_error',
+              lambda: _Ph2(_ring(0.95, 0.99, 1001, 2e12, 1e-2)).simulate(_tt, _drv, mode='envelope'),
+              RuntimeError,
+              'modulator inside a ring at dt < round trip: the unstable recursion must raise')
+
+    # A high-Q ring that settles to the wrong level must warn: the envelope result at the end,
+    # with the drive long constant, must match the quasi-static steady state.
+    _T2 = 1001
+    _tt2 = torch.linspace(0, 10e-9, _T2)
+    _drv2 = torch.cat([torch.ones(_T2 // 10, 1), torch.zeros(_T2 - _T2 // 10, 1)]).double()
+    with _w2.catch_warnings(record=True) as _caught:
+        _w2.simplefilter("always")
+        try:
+            _Ph2(_ring(0.998, 0.999, 4001, 400e9, 1e-4)).simulate(_tt2, _drv2, mode='envelope')
+            _raised = None
+        except Exception as e:
+            _raised = e
+    _msgs = [str(x.message) for x in _caught if 'did not settle' in str(x.message)]
+    tb.ok('ENV.unsettled_steady_state_warns', bool(_msgs) or isinstance(_raised, RuntimeError),
+          f"a high-Q ring whose envelope settles 0.9% off the steady state must be flagged: "
+          f"{(_msgs[0][:90] if _msgs else repr(_raised)[:90])!r}")
+
     return tb
 
 

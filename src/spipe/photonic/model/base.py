@@ -130,6 +130,42 @@ def _param_wrap(param: Any) -> Any:
         raise NotImplementedError(f"The provided parameter type of {param} is not supported.")
 
 
+#: Attributes that give the length of a device's propagation section, the section `alpha` applies to.
+_SECTION_LENGTHS = ('l', 'wg_l', 'wgu_l', 'wgl_l')
+
+
+def _check_alpha(model: str, kwargs: Dict) -> None:
+    """Warn about the two ways `alpha=` silently does not do what it looks like.
+
+    `alpha` is the field transmission of the device's propagation section -- the part of length
+    `l` (or `wg_l`, `wgu_l`, `wgl_l`). With every such length zero there is no section, so it has
+    no effect: `wg0 a b l=0 alpha=0.5` transmits everything. That is by design (a zero-length
+    connection loses nothing), but it used to happen without a word. And `alpha > 1` is gain,
+    which a passive device cannot have.
+    """
+    if 'alpha' not in kwargs:
+        return
+    try:
+        alpha = float(kwargs['alpha'])
+    except (TypeError, ValueError):
+        return
+    if alpha > 1.0:
+        warnings.warn(f"{model}: alpha={alpha:g} > 1 is optical gain; alpha is a field "
+                      f"transmission and a passive device has alpha <= 1.", stacklevel=4)
+    lengths = [k for k in _SECTION_LENGTHS if k in kwargs]
+    if alpha != 1.0 and lengths:
+        try:
+            all_zero = all(float(kwargs[k]) == 0.0 for k in lengths)
+        except (TypeError, ValueError):
+            all_zero = False
+        if all_zero:
+            warnings.warn(
+                f"{model}: alpha={alpha:g} has no effect because {', '.join(k + '=0' for k in lengths)}. "
+                f"alpha is the field transmission of the device's propagation section, and a "
+                f"zero-length section has none. For a lossy junction, add a short 'wg' with alpha.",
+                stacklevel=4)
+
+
 class Device(nn.Module):
     _name = ''
     _required_attr = []
@@ -155,6 +191,8 @@ class Device(nn.Module):
             raise TypeError(
                 f"{getattr(self, '_name', '') or self.__class__.__name__}: unknown parameter "
                 f"{', '.join(hints)}. Valid parameters: {', '.join(user_facing)}.")
+
+        _check_alpha(getattr(self, '_name', '') or self.__class__.__name__, kwargs)
 
         self.params = nn.ParameterDict()
 

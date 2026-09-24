@@ -151,6 +151,7 @@ here (``g``, ``d``, with their integer tap offsets) are exactly the coefficient 
 would need.
 """
 
+import contextlib
 import itertools
 import warnings
 from math import ceil, log2, pi
@@ -1028,13 +1029,87 @@ def simulate_envelope(photonic, t_value: Optional[torch.Tensor],
         # rebuild it, so that the two modes agree to the last bit rather than to a tolerance.
         return delegate()
 
-    y = _envelope_recursion(model.transfer, model.dynamic, model.g_taps, model.offsets,
-                            len(t_value))
-    z = _observe(model.transfer, y, model.d_taps, model.offsets)                   # (T, F, O)
+    # Record a graph only when a gradient was asked for. The device attributes are
+    # nn.Parameters, which require grad, so without this every envelope result carried a graph
+    # nobody wanted -- and `.numpy()` on it raised.
+    with (contextlib.nullcontext() if differentiable else torch.no_grad()):
+        y = _envelope_recursion(model.transfer, model.dynamic, model.g_taps, model.offsets,
+                                len(t_value))
+        z = _observe(model.transfer, y, model.d_taps, model.offsets)               # (T, F, O)
 
     res = z[..., model.detect_slice]
     middle = {node: z[..., start:start + 2] for node, start in model.prob_slices}
+    _check_envelope_physics(photonic, t_value, param_value, res, model.offsets)
     return res, middle
+
+
+def _check_envelope_physics(photonic, t_value, param_value, res, offsets) -> None:
+    """Two checks on the envelope result, each against something that must be true.
+
+    The recursion represents a delay shorter than the time step with a fractional-delay kernel
+    whose taps oscillate. Inside a feedback loop -- a modulator in a ring -- that kernel can act
+    as gain at some carriers and the recursion goes unstable: a ring with a 1.68 ps round trip
+    reported 464x the input power at 1 ps steps, and at 2 ps steps carriers the user never looked
+    at reached 4e15x, all with no error.
+
+    Note what is NOT a valid test: "detected power <= launched power at every instant". A
+    resonator stores energy and releases it when the input changes, so it can briefly emit more
+    than it receives (tb11's ring does, 4x, correctly); and a sharp drive edge represented in a
+    finite band overshoots (Gibbs), a bounded, known limitation of the method.
+
+    1. **Runaway** -- an instability grows without bound; stored-energy release and Gibbs
+       overshoot die away. So at the final sample the detected power must not exceed ten times
+       both the launched power and the circuit's own steady-state output. Beyond that the
+       numbers are meaningless, and it is an error.
+    2. **Steady state** -- once the drive has been constant for longer than the network's memory,
+       the envelope result must equal the quasi-static one (the module is built so that it
+       does). A mismatch is a warning, with its size.
+
+    Both use one quasi-static solve at the final time sample.
+    """
+    if res.numel() == 0 or not photonic.srce_node:
+        return
+    with torch.no_grad():
+        launched = sum(v.abs() ** 2 for v in photonic.srce_node.values())          # (F,)
+        reference, _ = Simulate.apply(
+            t_value[-1:], param_value[-1:], photonic.omega, photonic.node_has_ele,
+            photonic.srce_node, photonic.node2ind, photonic.circuit_element,
+            photonic.mod_element, photonic.mode_info, photonic.occur_order,
+            (photonic.dout_node, photonic.middle_node), photonic.inward_node,
+            photonic.outward_node, False)
+        final = (res.detach()[-1].abs() ** 2).sum(-1)                              # (F,)
+        steady = (reference[0].abs() ** 2).sum(-1)                                 # (F,)
+        bound = torch.maximum(launched.real, steady).clamp_min(1e-300)
+        runaway = float((final / bound).max())
+        if runaway > 10.0:
+            raise RuntimeError(
+                f"mode='envelope' has gone unstable: at the end of the record the detected power "
+                f"is {runaway:.4g}x both the launched power and this circuit's steady-state "
+                f"output, and still growing. No passive circuit does that; the numbers are "
+                f"meaningless. This is a known limitation of envelope mode with a modulator "
+                f"inside an optical loop (e.g. a ring): its fractional-delay kernel can act as "
+                f"gain for some carriers. Use mode='quasistatic', or keep modulators out of "
+                f"optical loops.")
+
+        # The output depends on the drive up to the largest positive tap offset in the past;
+        # once the drive has been constant that long, the envelope must have settled.
+        memory = max(int(offsets[-1]), 0) if len(offsets) else 0
+        drive = param_value.detach()
+        moving = (drive != drive[-1:]).any(dim=-1).nonzero()
+        still_since = int(moving[-1]) + 1 if len(moving) else 0
+        if len(t_value) - 1 - still_since >= memory:
+            scale = float(reference.abs().max())
+            if scale > 0:
+                mismatch = float((res.detach()[-1] - reference[0]).abs().max()) / scale
+                if mismatch > 1e-3:
+                    warnings.warn(
+                        f"mode='envelope' did not settle to the steady state: with the drive "
+                        f"constant for the last {len(t_value) - 1 - still_since} samples (longer "
+                        f"than the network's {memory}-sample memory), the detected field still "
+                        f"differs from the quasi-static solution by {mismatch:.3g} of its peak. "
+                        f"The transient before it is not trustworthy either. Compare against "
+                        f"mode='quasistatic', refine .freq, or change the time step.",
+                        RuntimeWarning, stacklevel=3)
 
 
 def _selftest_quasistatic(photonic, t_value, param_value) -> float:

@@ -31,7 +31,9 @@ def _check_channels(device: Device) -> int:
             f"port k+1, so the simulation must define exactly one frequency per output port. "
             f"Got len(omega) = {num_channel} frequency point(s) but the device has "
             f"{num_port} output port(s). Either change the '.freq' statement to use "
-            f"{num_port} frequency points, or use a 'wdm1to{num_channel}' device instead.")
+            f"{num_port} frequency points"
+            + (f", or use a 'wdm1to{num_channel}' device instead." if num_channel in (1, 2, 4)
+               else ". (WDM devices exist for 1, 2 and 4 channels: wdm1to1, wdm1to2, wdm1to4.)"))
     return num_channel
 
 

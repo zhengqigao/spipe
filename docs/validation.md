@@ -8,11 +8,11 @@ python test/run_all.py          # single PASS/FAIL verdict
 python test/run_all.py --quick  # the fast subset
 ```
 
-## Summary: 388 checks, 11 benches
+## Summary: 391 checks, 11 benches
 
 | bench | what it guards | checks |
 |---|---|---|
-| `tb01_photonic_algebra` | unitarity, reciprocity, energy, passivity, resonance | 42 |
+| `tb01_photonic_algebra` | unitarity, reciprocity, energy, passivity, resonance, a ring against theory | 43 |
 | `tb02_eo_interface` | the `mzm` modulator against textbook MZM physics, including passivity | 41 |
 | `tb03_oe_interface` | photodetector noise, bandwidth, and the detector options through `Photonic` | 19 |
 | `tb04_native_analytic` | built-in engine vs closed-form solutions | 35 |
@@ -21,7 +21,7 @@ python test/run_all.py --quick  # the fast subset
 | `tb07_fixedpoint` | convergence, divergence, bistability, stability of the converged state | 35 |
 | `tb08_lumerical_mesh` | photonic mesh vs Lumerical INTERCONNECT | 21 |
 | `tb10_bugfix_X` | regression guards on fixed defects, plus the BJT's closed form | 63 |
-| `tb11_envelope_P3` | optical memory / envelope propagation, and its gradients | 13 |
+| `tb11_envelope_P3` | optical memory / envelope propagation, its gradients and its failure checks | 15 |
 | `tb12_end_to_end_grad` | `d\|E\|²/dW` through the whole chain | 27 |
 
 `tb05` needs Xyce or HSPICE and is skipped without them, and two checks in `tb10` need a

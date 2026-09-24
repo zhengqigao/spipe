@@ -30,9 +30,9 @@ at exactly those nodes — there is no explicit "connect" statement.
 | directive | meaning |
 |---|---|
 | `.mode neff=<n> ng=<n> wl=<m>` | the waveguide mode. `neff` is the effective index (sets phase), `ng` the group index (sets delay), `wl` the reference wavelength in metres. Devices inherit these unless they override them. |
-| `.freq <start> <stop> <count>` | optical frequencies to solve at, in Hz. `count = 1` is a single CW carrier. More than one point means that many **independent** channels — see *Incoherent by default* below. |
-| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. Optional `power=<W>` and `eff=<0..1>` add a power budget (see below). |
-| `.prob <node>` | also report the complex optical field at `<node>`. Without any `.prob` line the `probes` dict comes back empty. |
+| `.freq <start> <stop> <count>` | optical frequencies to solve at, in Hz. `count = 1` is a single CW carrier. More than one point means that many **independent** channels — see *Incoherent by default* below. The grid is available afterwards as `Photonic(...).omega`, in rad/s. With `count = 1` only `start` is used. |
+| `.source <A>@<node> ...` | the laser. `<A>` is a complex amplitude launched at `<node>`; list one per input. Optional `power=<W>` and `eff=<0..1>` add a power budget (see below). One amplitude per node, applied to every `.freq` channel alike. |
+| `.prob <node>` | also report the complex optical field at `<node>`, without disturbing it. Each probe returns the two waves at that node: index 0 travels **into**, index 1 **out of**, the first device listed on that node. Without any `.prob` line the `probes` dict comes back empty. |
 
 `.prob` is spelled without the final `e`.
 
@@ -49,12 +49,12 @@ Passive devices:
 
 | prefix | ports (in, out) | what it is | parameters |
 |---|---|---|---|
-| `wg` | 1, 1 | waveguide | `l=` length in metres, `alpha=` field transmission (1 = lossless) |
+| `wg` | 1, 1 | waveguide | `l=` length in metres, `alpha=` field transmission of the whole length (1 = lossless; see *Loss* below) |
 | `ps` | 1, 1 | phase shifter | `ps=` phase in radians (`0.5pi` is accepted) |
-| `mzi` | 2, 2 | Mach–Zehnder interferometer used as a variable coupler | `theta=` splitting angle, `l=`, `alpha=` |
+| `mzi` | 2, 2 | Mach–Zehnder interferometer used as a variable coupler. With `l=0` it is a **directional coupler**: field through `cos θ`, cross `sin θ`, so power cross-coupling `κ² = sin²θ` — this is how to build a ring (see below). | `theta=` splitting angle, `l=`, `alpha=` |
 | `pbum` | 2, 2 | programmable building-unit: the 2×2 cell a photonic **mesh** is tiled from — two couplers with phase shifters between them | `theta=`, `phi=`, `l=`, `alpha=`, `cp_left=`, `cp_right=` |
 | `splitter1to1` … `splitter1to4` | 1, N | ideal N-way power splitter | — |
-| `wdm1to1` … `wdm1to4` | 1, N | wavelength de-multiplexer: channel *k* of the `.freq` grid leaves by output port *k*. The grid must therefore have **exactly N points** — `wdm1to2` with a single `.freq` point is an error, and says so. | — |
+| `wdm1to1`, `wdm1to2`, `wdm1to4` | 1, N | wavelength de-multiplexer (N = 1, 2 or 4; there is no `wdm1to3`): channel *k* of the `.freq` grid leaves by output port *k*. The grid must therefore have **exactly N points** — `wdm1to2` with a single `.freq` point is an error, and says so. | — |
 
 Active devices — these take an **electrical node** and an **electrical load level**, and
 are driven by a voltage:
@@ -64,7 +64,7 @@ are driven by a voltage:
 | `mzm` | 2, 2 | Mach–Zehnder **modulator**, push–pull. `V_π` is literally the voltage that takes it from full-on to full-off. | `vpi=` (> 0), `vbias=`, `il=` insertion loss in dB (≥ 0), `er=` extinction ratio in dB, `chirp=`, `tau=` response time, `order=` |
 | `modm` | 2, 2 | the paper's Eq. 5 modulator: a **variable-ratio coupler**, not a push–pull MZI. Kept unchanged for reproducibility. Its `V_π` differs from `mzm`'s by 2× and its bias point by π/2 — pick the one that matches your device. | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m, `wgu_l=`, `wgl_l=`, `alpha=` |
 | `modp` | 1, 1 | phase-only modulator | `coeff0=`, `coeff1=`, … (see below), `act_l=` active length in m (required), `wg_l=`, `alpha=` |
-| `pd` | 1 optical → 1 electrical | photodetector | `r0=` responsivity in A/W, `bw=` bandwidth in Hz, `idark=`, `coherent=1` |
+| `pd` | 1 optical → 1 electrical | photodetector. It absorbs the light, so it must sit on an **output** — a node with one device; use `.prob` to look inside a circuit. | `r0=` responsivity in A/W, `bw=` bandwidth in Hz, `idark=`, `coherent=1` |
 
 #### `mzm`: insertion loss and extinction ratio
 
@@ -89,6 +89,32 @@ The phase over the active length is then `β · act_l · (dn/neff)` with `β = n
 coefficients describe the **relative** effective-index change, not `dn` itself: for an index
 change of `dn/dV` per volt, write `coeff1 = (dn/dV) / neff`. Give at least one numbered
 coefficient; a line without any is an error. A plain `coeff=` is not read.
+
+`act_l` is the length over which the drive acts. It sets the modulation phase and counts
+toward the circuit's optical delay, but the passive propagation phase `β·act_l` itself is not
+included; add a `wg_l=` (or a `wg`) if that phase matters.
+
+#### Building a ring resonator
+
+There is no dedicated ring device: a ring is a coupler whose cross port is closed by a waveguide.
+
+```
+mzi0 a1 a2 b1 b2 theta=0.3176   # directional coupler, t = cos(theta) = 0.95
+wg0  b2 a2 l=62.83e-6 alpha=0.97  # the ring: round-trip length and field transmission
+```
+
+Light enters at `a1` and leaves at `b1`. This reproduces analytic ring theory (free spectral
+range, linewidth, extinction, drop port, intracavity build-up) to about 1e-12 —
+`test/tb/tb01_photonic_algebra.py` checks the all-pass spectrum. To look at the field inside
+the ring, use `.prob b2`, not a `pd`.
+
+#### Loss
+
+`alpha` is the field transmission of a device's propagation section — the length `l` (or
+`wg_l`, `wgu_l`, `wgl_l`). With that length zero there is no section, and `alpha` has no effect
+(SPIPE warns). For a lossy junction or a coupler's excess loss, add a short `wg` with `alpha`.
+`alpha > 1` would be gain; SPIPE warns. Loss is per device, not per unit length: for a
+waveguide of `L` metres with `x` dB/cm, `alpha = 10^(−x · L/0.01 / 20)`.
 
 ### Electrical load levels
 
@@ -118,6 +144,14 @@ returns. `power=` is **per unit of `Σ|A|²`**, not an absolute wattage, so it s
 the source amplitudes you wrote.
 
 ---
+
+### Numbers and units in the `.photonic` section
+
+Values may carry SPICE scale factors — `f p n u k meg g t` — or units, case-insensitive:
+lengths `nm um mm cm` (metres otherwise), times `fs ps ns us ms s`, frequencies
+`hz khz mhz ghz thz`, `pi` for angles (`theta=0.25pi`), powers `mw w`, currents `ma a`.
+**A bare `m` is an error** here: it would be metres in physics and milli in SPICE, and the
+`.electronic` section of the same file is SPICE, so SPIPE refuses to guess.
 
 ## The `.electronic` section
 

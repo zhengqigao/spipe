@@ -259,6 +259,9 @@ def _preprocess_mode(neff, ng=None, wl=1550e-9):
 
 
 def _preprocess_freq(start, stop, steps):
+    if int(steps) == 1 and float(stop) != float(start):
+        warnings.warn(f".freq {start} {stop} 1: with a single point only the start frequency "
+                      f"({float(start):g} Hz) is used; the stop value is ignored.", stacklevel=3)
     return 2 * pi * torch.linspace(float(start), float(stop), steps=int(steps), dtype = config['real_dtype'])
 
 def _match(given_str, target_dict):
@@ -423,6 +426,7 @@ class Photonic(object):
         self.outward_node = {}
         self.laser_info = {}
         self._max_group_delay = None
+        self._carrier_group_delay = None
         self._quasistatic_checked = False
 
         self.preprocess()
@@ -518,6 +522,28 @@ class Photonic(object):
 
         self.node2ind, self.ind2node, self.node_has_ele, self.inward_node, self.outward_node = self._node_preprocess()
 
+        # Detectors and probes are checked here, where the offending node can be named. (A missing
+        # node used to surface much later as "At least one node ... is not in the circuit".)
+        missing = [n for n in list(self.dout_node) + list(self.middle_node)
+                   if n not in self.node_has_ele]
+        if missing:
+            raise KeyError(
+                f"Node(s) {', '.join(repr(n) for n in dict.fromkeys(missing))} named on a pd or "
+                f".prob line are not connected to any device.")
+        # A detector absorbs the light arriving at it, so it belongs on an output: a node with
+        # exactly one device. On a node joining two devices there are two waves -- one each way --
+        # and which one the detector read depended on which device happened to be listed first,
+        # so reordering two netlist lines changed the photocurrent (15.8 vs 0.0 inside a ring).
+        for node in self.dout_node:
+            devices = self.node_has_ele.get(node, [])
+            if len(devices) > 1:
+                raise ValueError(
+                    f"A photodetector is on node {node!r}, which joins {devices[0]!r} and "
+                    f"{devices[1]!r}. A detector absorbs light, so it must sit on an output -- a "
+                    f"node with one device. To observe the field inside the circuit without "
+                    f"disturbing it, use '.prob {node}' instead: its two entries are the waves "
+                    f"travelling into and out of {devices[0]!r}, the first device listed on that node.")
+
         return
 
     def max_group_delay(self) -> float:
@@ -567,6 +593,49 @@ class Photonic(object):
         self._max_group_delay = _longest_simple_path(adjacency) if adjacency else 0.0
         return self._max_group_delay
 
+    def carrier_group_delay(self) -> float:
+        """The largest group delay ``|d phase / d omega|`` from the sources to the detectors,
+        measured at the simulated carriers.
+
+        Two steady-state solves a hair apart in frequency (a relative step of 1e-9, far finer
+        than any resonance) give the phase slope of every source-to-detector transfer at every
+        carrier. Unlike :meth:`max_group_delay`, which adds up path lengths, this sees a
+        resonator: near resonance a ring's group delay is set by its photon lifetime. Carriers
+        carrying less than 1e-6 of the strongest transfer are skipped, where the phase is
+        meaningless. Modulators are held at zero drive. Returns 0 if there are no detectors.
+        """
+        if self._carrier_group_delay is not None:
+            return self._carrier_group_delay
+        if not self.dout_node or self.omega is None:
+            self._carrier_group_delay = 0.0
+            return 0.0
+        t1 = torch.zeros(1, dtype=config['real_dtype'], device=config['device'])
+        p1 = torch.zeros(1, len(self.occur_order), dtype=config['real_dtype'],
+                         device=config['device'])
+        args = (self.node_has_ele, self.srce_node, self.node2ind, self.circuit_element,
+                self.mod_element, self.mode_info, self.occur_order,
+                (self.dout_node, []), self.inward_node, self.outward_node, False)
+        rel = 1e-9
+        with torch.no_grad(), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                base, _ = Simulate.apply(t1, p1, self.omega, *args)
+                bumped, _ = Simulate.apply(t1, p1, self.omega * (1.0 + rel), *args)
+            except Exception:
+                self._carrier_group_delay = 0.0          # an estimate must never break a run
+                return 0.0
+        base, bumped = base[0], bumped[0]                            # (F, detectors)
+        power = base.abs() ** 2
+        keep = power > 1e-6 * float(power.max()) if float(power.max()) > 0 else power > 0
+        if not bool(keep.any()):
+            self._carrier_group_delay = 0.0
+            return 0.0
+        dphase = torch.angle(bumped[keep] / base[keep])
+        # The grid may sit on the CPU while the solve ran on a GPU; put it where the result is.
+        domega = (self.omega.to(base.device) * rel).unsqueeze(-1).expand_as(base)[keep]
+        self._carrier_group_delay = float((dphase / domega).abs().max())
+        return self._carrier_group_delay
+
     def check_quasistatic(self, dt: float) -> Optional[float]:
         """Warn if the steady-state (quasi-static) photonic solve is no longer justified.
 
@@ -595,7 +664,11 @@ class Photonic(object):
         if not (dt > 0) or dt != dt:  # non-positive or NaN
             return None
 
-        tau = self.max_group_delay()
+        # Two estimates: the longest light path (sees delay lines and meshes) and the measured
+        # group delay at the simulated carriers (sees resonators: a ring's photon lifetime is its
+        # round trip times its finesse, which no path length shows -- 1.8 ps vs 279 ps on a
+        # high-Q ring, and the check used to stay silent).
+        tau = max(self.max_group_delay(), self.carrier_group_delay())
 
         if tau > 0.1 * dt:
             warnings.warn(

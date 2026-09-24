@@ -188,6 +188,32 @@ def build():
         except Exception as e:
             tb.ok(f'REG.{name}', False, f"raised {type(e).__name__}: {str(e)[:110]}")
 
+    # ---------- an all-pass ring against ring-resonator theory -----------
+    # The ring check above only asked that the through port vary. This compares the whole
+    # spectrum with the analytic all-pass transmission
+    #     T = (a^2 - 2 a t cos(phi) + t^2) / (1 - 2 a t cos(phi) + (a t)^2),  phi = beta L,
+    # which fixes the free spectral range, the linewidth and the extinction at once.
+    # SPIPE's dispersion: n(lambda) = ng + (neff - ng) * lambda / lambda0.
+    try:
+        _c = 299792458.0
+        _L, _t, _a = 2 * math.pi * 10e-6, 0.95, 0.97
+        _f0, _f1, _N = 192e12, 196e12, 2001
+        _ring = [l + "\n" for l in [
+            ".mode neff=2.35 ng=4.0 wl=1550e-9", f".freq {_f0} {_f1} {_N}", ".source 1.0@a1",
+            f"mzi0 a1 a2 b1 b2 theta={math.acos(_t)}", f"wg0 b2 a2 l={_L} alpha={_a}",
+            "pd1 b1 vo1 level1 r0=1.0", ".prob b1"]]
+        _, _pr, _ = Photonic(_ring).simulate()
+        _T = (_pr['b1'][0, :, 1].abs() ** 2).double()
+        _f = torch.linspace(_f0, _f1, _N, dtype=torch.float64)
+        _n = (_c / _f) / 1550e-9 * (2.35 - 4.0) + 4.0
+        _phi = 2 * math.pi * _f * _n / _c * _L
+        _Ta = ((_a ** 2 - 2 * _a * _t * torch.cos(_phi) + _t ** 2)
+               / (1 - 2 * _a * _t * torch.cos(_phi) + (_a * _t) ** 2))
+        tb.lt('RING.allpass_spectrum_analytic', float((_T - _Ta).abs().max()), 1e-9,
+              f"max |T - T_analytic| over {_N} points spanning several FSRs (t={_t}, a={_a})")
+    except Exception as e:
+        tb.ok('RING.allpass_spectrum_analytic', False, f"{e!r}")
+
     return tb
 
 
